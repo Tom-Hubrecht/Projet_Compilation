@@ -24,3 +24,6 @@ setup.log
 
 # Dependencies are rebuilt each time
 .depend
+
+# Vim session
+go.vim
