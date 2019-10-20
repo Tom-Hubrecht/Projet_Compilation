@@ -1,0 +1,12 @@
+# Auxiliary files
+*.aux
+*.log
+*.toc
+*.out
+
+# Output files
+*.pdf
+
+# TeXstudio files
+*.synctex.gz
+
