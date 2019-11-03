@@ -27,7 +27,7 @@ type constant =
   | Cbool of bool
   | Cnil
 
-type expr =
+type raw_expr =
   | Ecst of constant
   | Evar of ident
   | Eattr of expr * ident
@@ -35,6 +35,7 @@ type expr =
   | Eprint of expr list
   | Eunop of unop * expr
   | Ebinop of binop * expr * expr
+and expr = Lexing.position * Lexing.position * raw_expr
 
 type instr =
   | Iempty
@@ -58,5 +59,5 @@ type decl =
   | Dstruct of structure
   | Dfunc of fonction
 
-type file = string option * decl list
+type file = bool * decl list
 
