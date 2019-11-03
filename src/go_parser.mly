@@ -2,17 +2,22 @@
 /* Analyseur syntaxique pour Petit Go */
 
 %{
-  open Go_ast
+open Go_ast
 
-  exception Import_error of string
+exception Parsing_error of string
+
+let rec get_id = function
+  | [] -> []
+  | (Evar id)::q -> id::(get_id q)
+  | _ -> raise Error
+
 %}
 
-%token <int> INT
+%token <string> INT
 %token <string> STRING
 %token <string> IDENT
 
 %token ELSE FALSE FOR FUNC IF IMPORT NIL PACKAGE RETURN STRUCT TRUE TYPE VAR
-%token FMT PRINT
 %token INC "++"
 %token DEC "--"
 %token ALLOC "="
@@ -54,21 +59,31 @@
 %start file
 
 /* Type renvoyé par l'analyseur syntaxique */
-%type <Ast.file> file
+%type <Go_ast.file> file
 
 %%
 
-file:
-| PACKAGE id = IDENT imp = option(import) decls = decl* EOF
-    {if id <> "main" then
-       (raise Syntax_error)
-     else
-       (imp, decls)}
+sep_list(sep, X):
+| x = X
+    {[x]}
+| x = X sep
+    {[x]}
+| x = X sep l = sep_list(sep, X)
+    {x::l}
 ;
 
-import:
-| IMPORT s = STRING ";"
-    {if s <> "fmt" then raise (Import_error "Unknown module") else s}
+file:
+| PACKAGE id = IDENT ";" decls = decl* EOF
+    {if id <> "main" then
+       raise Error
+     else
+       (None, decls)}
+| PACKAGE id = IDENT ";" IMPORT s = STRING ";" decls = decl* EOF
+    {if id <> "main" || s <> "\"fmt\"" then
+       raise Error
+     else
+       (Some s, decls)}
+;
 
 decl:
 | s = struc
@@ -78,12 +93,16 @@ decl:
 ;
 
 struc:
-| TYPE id = IDENT STRUCT "{" v = separated_list(";", vars) "}" ";"
+| TYPE id = IDENT STRUCT "{" "}" ";"
+    {id, []}
+| TYPE id = IDENT STRUCT "{" v = sep_list(";", vars) "}" ";"
     {id, v}
 ;
 
 fonc:
-| FUNC id = IDENT "(" v = separated_list(",", vars) ")" t = r_type b = bloc ";"
+| FUNC id = IDENT "(" ")" t = r_type? b = bloc ";"
+    {id, [], t, b}
+| FUNC id = IDENT "(" v = sep_list(",", vars) ")" t = r_type? b = bloc ";"
     {id, v, t, b}
 ;
 
@@ -95,7 +114,7 @@ vars:
 r_type:
 | t = v_type;
     {[t]}
-| "(" l = separated_nonempty_list(",", v_type) ")"
+| "(" l = sep_list(",", v_type) ")"
     {l}
 ;
 
@@ -119,17 +138,14 @@ expr:
     {Evar id}
 | e = expr "." id = IDENT
     {Eattr(e, id)}
+| e = expr "." id = IDENT "(" l = separated_list(",", expr) ")"
+    {if e = Evar "fmt" && id = "Print" then
+       Eprint l
+     else
+       raise Error
+    }
 | id = IDENT "(" a = separated_list(",", expr) ")"
     {Ecall(id, a)}
-| FMT "." PRINT "(" e = separated_list(",", expr) ")"
-    //{if i1 <> "fmt" || i2 <> "Print" then raise Syntax_error else Eprint e}
-    {Eprint e}
-| PRINT
-    {Evar "Print"}
-| e = expr "." PRINT
-    {Eattr(e, "Print")}
-| PRINT "(" a = separated_list(",", expr) ")"
-    {Ecall("Print", a)}
 | u = unop e = expr %prec unary
     {Eunop(u, e)}
 | e1 = expr o = op e2 = expr
@@ -190,13 +206,13 @@ cst:
 ;
 
 bloc:
-| "{" i = separated_nonempty_list(";", instr) "}"
-    {match i with
-     | [x] -> x
-     | _ -> Ibloc i}
+| "{" i = separated_nonempty_list(";", instr)  "}"
+    {if i = [Iempty] then Iempty else Ibloc i}
 ;
 
 instr:
+| // Les instructions vides sont autorisées
+    {Iempty}
 | b = bloc
     {b}
 | i = instr_s
@@ -207,13 +223,21 @@ instr:
     {Ivar(v, t, [])}
 | VAR v = separated_nonempty_list(",", IDENT) t = v_type?
   "=" l = separated_nonempty_list(",", expr)
-    {IVar(v, t, l)}
+    {Ivar(v, t, l)}
 | RETURN e = separated_list(",", expr)
     {Ireturn e}
 | FOR b = bloc
     {Ifor(Ecst(Cbool true), b)}
 | FOR e = expr b = bloc
     {Ifor(e, b)}
+| FOR ";" e = expr ";" b = bloc
+    {Ifor(e, b)}
+| FOR i = instr_s ";" e = expr ";" b = bloc
+    {Ibloc [i; Ifor(e, b)]}
+| FOR ";" e = expr ";" i = instr_s b = bloc
+    {Ifor(e, Ibloc [b; i])}
+| FOR i1 = instr_s ";" e = expr ";" i2 = instr_s b = bloc
+    {Ibloc [i1; Ifor(e, Ibloc [b; i2])]}
 ;
 
 instr_s:
@@ -223,19 +247,22 @@ instr_s:
     {Iincr e}
 | e = expr "--"
     {Idecr e}
-| l = separated_nonempty_list(",", expr)
-  "=" r = separated_nonempty_list(",", expr)
-    {Iassoc(l, r)}
-| l = separated_nonempty_list(",", IDENT) ":="
+| l = separated_nonempty_list(",", expr) "="
   r = separated_nonempty_list(",", expr)
-    {Ivar(l, None, r)}
+    {Iassoc(l, r)}
+| l = separated_nonempty_list(",", expr) ":="
+  r = separated_nonempty_list(",", expr)
+    {Ivar((get_id l), None, r)}
 ;
 
 instr_i:
 | IF e = expr b = bloc
-    {Iif(e, b, Ibloc [])}
+    {Iif(e, b, Iempty)}
 | IF e = expr b = bloc ELSE i = instr_i
     {Iif(e, b, i)}
 | IF e = expr b1 = bloc ELSE b2 = bloc
     {Iif(e, b1, b2)}
 ;
+
+
+

@@ -22,7 +22,7 @@ type binop =
   | Beq | Bneq | Blt | Ble | Bgt | Bge
 
 type constant =
-  | Cint of int
+  | Cint of string
   | Cstring of string
   | Cbool of bool
   | Cnil
@@ -37,19 +37,20 @@ type expr =
   | Ebinop of binop * expr * expr
 
 type instr =
+  | Iempty
   | Ibloc of instr list
   | Iif of expr * instr * instr
   | Iexpr of expr
   | Iincr of expr
   | Idecr of expr
   | Iassoc of expr list * expr list
-  | Ivar of ident list * v_type option * expr list option
+  | Ivar of ident list * v_type option * expr list
   | Ireturn of expr list
   | Ifor of expr * instr
 
-type var = string list * v_type
+type var = ident list * v_type
 
-type fonction = string * var list * r_type * instr
+type fonction = string * var list * r_type option * instr
 
 type structure = string * var list
 

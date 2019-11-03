@@ -1,4 +1,4 @@
-CMX=
+CMX=go_lexer.cmx go_parser.cmx go_printer.cmx go_compiler.cmx
 PARSER_GEN=go_parser.ml go_parser.automaton go_parser.conflicts go_parser.mli
 GENERATED=go_lexer.ml $(PARSER_GEN)
 BIN=pgoc
