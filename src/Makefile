@@ -1,9 +1,12 @@
-CMX=go_lexer.cmx go_parser.cmx go_printer.cmx go_compiler.cmx
+SOURCE=go_ast.mli go_lexer.mll go_parser.mly go_printer.ml\
+	   go_typer.ml go_assembler.ml go_compiler.ml
+CMX=go_lexer.cmx go_parser.cmx go_printer.cmx go_typer.cmx\
+	go_compiler.cmx
 PARSER_GEN=go_parser.ml go_parser.automaton go_parser.conflicts go_parser.mli
 GENERATED=go_lexer.ml $(PARSER_GEN)
 BIN=pgoc
 
-all: $(BIN)
+all: $(SOURCE) $(BIN)
 
 $(BIN): $(CMX)
 	ocamlopt -o $(BIN) $(CMX)
@@ -14,7 +17,7 @@ $(BIN): $(CMX)
 	ocamlopt -c $<
 
 .ml.cmx:
-	ocamlopt -c  $<
+	ocamlopt -c $<
 
 .mll.ml:
 	ocamllex $<
