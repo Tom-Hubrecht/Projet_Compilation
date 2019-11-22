@@ -5,11 +5,23 @@
 open Go_ast
 
 exception Parsing_error of string
+exception Syntax_error of Lexing.position * Lexing.position * string
 
 let rec get_id = function
   | [] -> []
-  | (Evar id)::q -> id::(get_id q)
+  | (s, e, Evar id)::q -> (s, e, id)::(get_id q)
   | _ -> raise Error
+
+let rec filter = function
+  | [] -> []
+  | [_, _, Iempty] -> []
+  | [x] -> [x]
+  | (_, _, Iempty)::q -> filter q
+  | x::q -> x::(filter q)
+
+let content_of_loc (_, _, r_e) = r_e
+
+let d_pos = Lexing.dummy_pos
 
 %}
 
@@ -72,17 +84,22 @@ sep_list(sep, X):
     {x::l}
 ;
 
+loc_ident:
+| id = IDENT
+    {$startpos, $endpos, id}
+;
+
 file:
 | PACKAGE id = IDENT ";" decls = decl* EOF
     {if id <> "main" then
        raise Error
      else
-       (None, decls)}
+       (false, decls)}
 | PACKAGE id = IDENT ";" IMPORT s = STRING ";" decls = decl* EOF
     {if id <> "main" || s <> "\"fmt\"" then
        raise Error
      else
-       (Some s, decls)}
+       (true, decls)}
 ;
 
 decl:
@@ -93,26 +110,30 @@ decl:
 ;
 
 struc:
-| TYPE id = IDENT STRUCT "{" "}" ";"
+| TYPE id = loc_ident STRUCT "{" "}" ";"
     {id, []}
-| TYPE id = IDENT STRUCT "{" v = sep_list(";", vars) "}" ";"
+| TYPE id = loc_ident STRUCT "{" v = sep_list(";", vars) "}" ";"
     {id, v}
 ;
 
 fonc:
-| FUNC id = IDENT "(" ")" t = r_type? b = bloc ";"
+| FUNC id = loc_ident "(" ")" t = r_type b = bloc ";"
     {id, [], t, b}
-| FUNC id = IDENT "(" v = sep_list(",", vars) ")" t = r_type? b = bloc ";"
+| FUNC id = loc_ident "(" ")" b = bloc ";"
+    {id, [], [], b}
+| FUNC id = loc_ident "(" v = sep_list(",", vars) ")" t = r_type b = bloc ";"
     {id, v, t, b}
+| FUNC id = loc_ident "(" v = sep_list(",", vars) ")" b = bloc ";"
+    {id, v, [], b}
 ;
 
 vars:
-| l = separated_nonempty_list(",", IDENT) t = v_type
+| l = separated_nonempty_list(",", loc_ident) t = v_type
     {l, t}
 ;
 
 r_type:
-| t = v_type;
+| t = v_type
     {[t]}
 | "(" l = sep_list(",", v_type) ")"
     {l}
@@ -121,35 +142,35 @@ r_type:
 v_type:
 | id = IDENT
     {match id with
-      | "int" -> Tint
-      | "bool" -> Tbool
-      | "string" -> Tstring
-      | _ -> Tstruct id}
+      | "int" -> $startpos, $endpos, Tint
+      | "bool" -> $startpos, $endpos, Tbool
+      | "string" -> $startpos, $endpos, Tstring
+      | _ -> $startpos, $endpos, Tstruct id}
 | "*" t = v_type
-    {Pointer t}
+    {let s, e, t' = t in s, e, Pointer t'}
 ;
 
 expr:
 | c = cst
-    {Ecst c}
+    {$startpos, $endpos, Ecst c}
 | "(" e = expr ")"
-    {e}
+    {$startpos, $endpos, (content_of_loc e)}
 | id = IDENT
-    {Evar id}
-| e = expr "." id = IDENT
-    {Eattr(e, id)}
+    {$startpos, $endpos, Evar id}
+| e = expr "." id = loc_ident
+    {$startpos, $endpos, Eattr(e, id)}
 | e = expr "." id = IDENT "(" l = separated_list(",", expr) ")"
-    {if e = Evar "fmt" && id = "Print" then
-       Eprint l
+    {if (content_of_loc e) = Evar "fmt" && id = "Print" then
+       ($startpos, $endpos, Eprint l)
      else
        raise Error
     }
-| id = IDENT "(" a = separated_list(",", expr) ")"
-    {Ecall(id, a)}
+| id = loc_ident "(" a = separated_list(",", expr) ")"
+    {$startpos, $endpos, Ecall(id, a)}
 | u = unop e = expr %prec unary
-    {Eunop(u, e)}
+    {$startpos, $endpos, Eunop(u, e)}
 | e1 = expr o = op e2 = expr
-    {Ebinop(o, e1, e2)}
+    {$startpos, $endpos, Ebinop(o, e1, e2)}
 ;
 
 cst:
@@ -207,61 +228,65 @@ cst:
 
 bloc:
 | "{" i = separated_nonempty_list(";", instr)  "}"
-    {if i = [Iempty] then Iempty else Ibloc i}
+    {match filter i with
+     | [] -> $startpos, $endpos, Iempty
+     | [_, _, x] -> $startpos, $endpos, x
+     | _ -> $startpos, $endpos, Ibloc i}
 ;
 
 instr:
 | // Les instructions vides sont autorisées
-    {Iempty}
+    {d_pos, d_pos, Iempty}
 | b = bloc
     {b}
 | i = instr_s
     {i}
 | i = instr_i
     {i}
-| VAR v = separated_nonempty_list(",", IDENT) t = v_type?
-    {Ivar(v, t, [])}
-| VAR v = separated_nonempty_list(",", IDENT) t = v_type?
+| VAR v = separated_nonempty_list(",", loc_ident) t = v_type?
+    {$startpos, $endpos, Ivar(v, t, [])}
+| VAR v = separated_nonempty_list(",", loc_ident) t = v_type?
   "=" l = separated_nonempty_list(",", expr)
-    {Ivar(v, t, l)}
+    {$startpos, $endpos, Ivar(v, t, l)}
 | RETURN e = separated_list(",", expr)
-    {Ireturn e}
+    {$startpos, $endpos, Ireturn e}
 | FOR b = bloc
-    {Ifor(Ecst(Cbool true), b)}
+    {$startpos, $endpos, Ifor((d_pos, d_pos, Ecst(Cbool true)), b)}
 | FOR e = expr b = bloc
-    {Ifor(e, b)}
+    {$startpos, $endpos, Ifor(e, b)}
 | FOR ";" e = expr ";" b = bloc
-    {Ifor(e, b)}
+    {$startpos, $endpos, Ifor(e, b)}
 | FOR i = instr_s ";" e = expr ";" b = bloc
-    {Ibloc [i; Ifor(e, b)]}
+    {d_pos, d_pos, Ibloc [i;$startpos, $endpos, Ifor(e, b)]}
 | FOR ";" e = expr ";" i = instr_s b = bloc
-    {Ifor(e, Ibloc [b; i])}
+    {$startpos, $endpos, Ifor(e, (d_pos, d_pos, Ibloc [b; i]))}
 | FOR i1 = instr_s ";" e = expr ";" i2 = instr_s b = bloc
-    {Ibloc [i1; Ifor(e, Ibloc [b; i2])]}
+    {d_pos, d_pos, Ibloc [i1; $startpos, $endpos,
+                              Ifor(e, (d_pos, d_pos, Ibloc [b; i2]))]}
 ;
 
 instr_s:
 | e = expr
-    {Iexpr e}
+    {$startpos, $endpos, Iexpr e}
 | e = expr "++"
-    {Iincr e}
+    {$startpos, $endpos, Iincr e}
 | e = expr "--"
-    {Idecr e}
+    {$startpos, $endpos, Idecr e}
 | l = separated_nonempty_list(",", expr) "="
   r = separated_nonempty_list(",", expr)
-    {Iassoc(l, r)}
+    {$startpos, $endpos, Iassoc(l, r)}
 | l = separated_nonempty_list(",", expr) ":="
   r = separated_nonempty_list(",", expr)
-    {Ivar((get_id l), None, r)}
+    {$startpos, $endpos, Ivar((get_id l), None, r)}
 ;
 
 instr_i:
 | IF e = expr b = bloc
-    {Iif(e, b, Iempty)}
+    {$startpos, $endpos, Iif(e, b, (d_pos, d_pos, Iempty))}
 | IF e = expr b = bloc ELSE i = instr_i
-    {Iif(e, b, i)}
+    {$startpos, $endpos, Iif(e, b, i)}
 | IF e = expr b1 = bloc ELSE b2 = bloc
-    {Iif(e, b1, b2)}
+    {$startpos, $endpos, Iif(e, b1, b2)}
 ;
 
 
