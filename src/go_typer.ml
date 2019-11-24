@@ -31,8 +31,9 @@ let id_of_type = function
 let rec check_type v = function
   | sp, ep, Pointer t -> Pointer (check_type v (sp, ep, t))
   | t ->
-    if List.mem (content_of_loc t) v then
-      content_of_loc t
+    let t' = content_of_loc t in
+    if List.mem t' v then
+      t'
     else
       raise (Decl_error (id_of_type t, "Undefined structure."))
 
@@ -159,7 +160,16 @@ and type_expr f_env s_env env = function
           Pointer t', Teunop(u, e')
         | _ -> raise (Typing_error (e, [t], [Tnil]))
     end
-  | (_, _, Ecall _) as e -> type_call f_env s_env env e
+  | (sp, ep, Ecall _) as e ->
+    begin
+      let r, e' = type_call f_env s_env env e in
+      match r with
+        | [t] -> t, e'
+        | _ ->
+          raise (Decl_error
+                   ((sp, ep, str_of_expr e),
+                    "this function should return only one value"))
+    end
   | sp, ep, Eprint _ as e ->
     let i = sp, ep, str_of_expr e in
     raise (Decl_error (i, "fmt.Print has no type and cannot be used here."))
@@ -225,7 +235,7 @@ and type_instr f_env s_env env r v fmt = function
     false, false, Tiassoc(l1', l2')
   | _, _, Ivar(l1, None, [_, _, Ecall _]) -> assert false
   | sp, ep, Ivar(l1, None, l2) as i ->
-    if List.length l1 <>List.length l2 then
+    if List.length l1 <> List.length l2 then
       raise (Decl_error
                ((sp, ep, str_of_instr i),
                 "both sides of := must have the same number of expressions."));
@@ -239,7 +249,24 @@ and type_instr f_env s_env env r v fmt = function
                   e'::l) [] l1 l2 in
     false, false, Tivar(l1, None, List.rev l')
   | _, _, Ivar(l1, Some t, [_, _, Ecall _]) -> assert false
-  | _, _, Ivar(l1, Some t, l2) ->  assert false
+  | _, _, Ivar(l1, Some t, []) ->
+    let t' = check_type v t in
+    List.iter (fun x -> add_var x t' env) l1;
+    false, false, Tivar(l1, Some t, [])
+  | sp, ep, Ivar(l1, Some t, l2) as i ->
+    let t = check_type v t in
+    if List.length l1 <> List.length l2 then
+      raise (Decl_error
+               ((sp, ep, str_of_instr i),
+                "both sides of := must have the same number of expressions."));
+    let l' = List.fold_left2
+               (fun l x e ->
+                  let (t', _) as e' = type_expr f_env s_env env e in
+                  if t' <> t then
+                    raise (Typing_error (e, [t'], [t]));
+                  add_var x t env;
+                  e'::l) [] l1 l2 in
+    false, false, Tivar(l1, None, List.rev l')
   | _, _, Ireturn [_, _, Ecall _] -> assert false
   | sp, ep, Ireturn l as e_r ->
     if (List.length l <> List.length r) then
@@ -254,12 +281,20 @@ and type_instr f_env s_env env r v fmt = function
                   e'::lis) [] r l in
     true, false, Tireturn (List.rev l')
 
+(* type_call returns the list of types returned and the transformed AST *)
 and type_call f_env s_env env = function
   | _, _, Ecall((_, _, "new"), [sp, ep, Evar s]) ->
-    if Smap.mem s s_env then
-      Pointer (Tstruct s), Tenew s
-    else
-      raise (Decl_error ((sp, ep, s), "Undefined type"))
+    begin
+      match s with
+        | "int" -> [Pointer Tint], Tenew Tint
+        | "bool" -> [Pointer Tbool], Tenew Tbool
+        | "string" -> [Pointer Tstring], Tenew Tstring
+        | _ ->
+          if Smap.mem s s_env then
+            [Pointer (Tstruct s)], Tenew (Tstruct s)
+          else
+            raise (Decl_error ((sp, ep, s), "Undefined type"));
+    end
   | sp, ep, Ecall((_, _, "new"), _) as e ->
     let s = str_of_expr e in
     raise (Decl_error ((sp, ep, s), "new must be called on a structure."))
