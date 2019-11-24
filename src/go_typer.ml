@@ -2,12 +2,16 @@
 (* Analyse du typage d'un fichier Petit Go *)
 
 open Go_ast
+open Go_printer
+open Format
 
 exception Typing_error of expr * raw_r_type * raw_r_type
 exception Decl_error of ident * string
 exception Field_error of ident * raw_v_type
 exception Nil_error of expr
 exception Left_error of expr
+exception Import_error of string
+exception Main_error of string
 
 module Smap = Map.Make(String)
 
@@ -16,9 +20,7 @@ let str_of_instr = Go_printer.p_str Go_printer.p_instr
 
 let a_decl = " is already declared"
 
-let get_opt = function
-  | None -> raise (Invalid_argument "None has no content")
-  | Some x -> x
+let d_pos = Lexing.dummy_pos
 
 let content_of_loc (_, _, x) = x
 
@@ -27,16 +29,12 @@ let id_of_type = function
   | _ -> assert false
 
 let rec check_type v = function
-  | sp, ep, Pointer t -> check_type v (sp, ep, t)
+  | sp, ep, Pointer t -> Pointer (check_type v (sp, ep, t))
   | t ->
     if List.mem (content_of_loc t) v then
       content_of_loc t
     else
       raise (Decl_error (id_of_type t, "Undefined structure."))
-
-let check_o_type v = function
-  | None -> None
-  | Some t -> Some (check_type v t)
 
 let rec check_r_type v = function
   | [] -> []
@@ -63,13 +61,25 @@ let type_cst = function
   | Cbool b -> Tbool, Cbool b
   | Cnil -> Tnil, Cnil
 
+let add_var (sp, ep, x' as x) t env =
+  if x' <> "_" then
+    begin
+      if Smap.mem x' !env then
+        raise (Decl_error (x, "this variable is already declared"));
+      env := Smap.add x' (t, false, (sp, ep)) !env
+    end
+
 let rec type_left_expr f_env s_env env = function
   | _, _, Evar "_" -> (Tnoop, Tevar "_")
   | sp, ep, Evar x ->
-    if Smap.mem x env then
-      (Smap.find x env), Tevar x
+    if Smap.mem x !env then
+      begin
+        let t, _, p = Smap.find x !env in
+        env := Smap.add x (t, true, p) !env;
+        t, Tevar x
+      end
     else
-      raise (Decl_error ((sp, ep, x), "Undefined variable."))
+      raise (Decl_error ((sp, ep, x), "undefined variable."))
   | _, _, Eattr(e, _) as e1 ->
     let _ = type_left_expr f_env s_env env e in
     type_expr f_env s_env env e1
@@ -78,11 +88,17 @@ let rec type_left_expr f_env s_env env = function
 
 and type_expr f_env s_env env = function
   | _, _, Ecst x -> let t, c = type_cst x in t, Tecst x
+  | sp, ep, Evar "_" ->
+    raise (Decl_error ((sp, ep, "_"), "cannot use _ as a value"))
   | sp, ep, Evar x ->
-    if Smap.mem x env then
-      (Smap.find x env), Tevar x
+    if Smap.mem x !env then
+      begin
+        let t, _, p = Smap.find x !env in
+        env := Smap.add x (t, true, p) !env;
+        t, Tevar x
+      end
     else
-      raise (Decl_error ((sp, ep, x), "Undefined variable."))
+      raise (Decl_error ((sp, ep, x), "undefined variable."))
   | _, _, Eattr(e, i) ->
     begin
       let (t, _) as e' = type_expr f_env s_env env e in
@@ -125,9 +141,9 @@ and type_expr f_env s_env env = function
         | Beq | Bneq ->
           begin
             match t1, t2 with
+              | Tnil, Tnil -> raise (Nil_error e)
               | Tnil, Pointer _ | Pointer _, Tnil | _, _ when t1 = t2 ->
                 (Tbool, Tebinop(b, e1', e2'))
-              | Tnil, Tnil -> raise (Nil_error e)
               | _ -> raise (Typing_error (e1, [t1], [t2]));
           end
     end
@@ -148,60 +164,95 @@ and type_expr f_env s_env env = function
     let i = sp, ep, str_of_expr e in
     raise (Decl_error (i, "fmt.Print has no type and cannot be used here."))
 
-and type_instr f_env s_env env = function
-  | _, _, Iempty -> Tiempty
-  | _, _, Ibloc l -> Tibloc (List.map (type_instr f_env s_env env) l)
+(* type_instr returns the new AST & true if a value is returned,
+ * false otherwise *)
+and type_instr f_env s_env env r v fmt = function
+  | _, _, Iempty ->
+    false, false, Tiempty
+  | _, _, Ibloc l ->
+    let b = ref false and u = ref false in
+    let l' = List.fold_left
+               (fun l' i ->
+                  let b', u', i' = type_instr f_env s_env env r v fmt i in
+                  b := !b || b';
+                  u := !u || u';
+                  i'::l') [] l in
+    Smap.iter
+      (fun x (_, b, (sp, ep)) ->
+         if not b then
+           raise (Decl_error((sp, ep, x),
+                             "variable "^x^" declared but not used")))
+      !env;
+    !b, !u, Tibloc l'
   | _, _, Iif(e, i1, i2) ->
     let (t, _) as e' = type_expr f_env s_env env e in
     if t <> Tbool then
       raise (Typing_error (e, [t], [Tbool]));
-    Tiif(e', type_instr f_env s_env env i1, type_instr f_env s_env env i2)
-  | _, _, Iexpr(_, _, Eprint l) ->
-    Tiprint (List.map (type_expr f_env s_env env) l)
-  | _, _, Iexpr e -> Tiexpr(type_expr f_env s_env env e)
+    let env1 = ref !env and env2 = ref !env in
+    let b1, u1, i1' = type_instr f_env s_env env1 r v fmt i1 in
+    let b2, u2, i2' = type_instr f_env s_env env2 r v fmt i2 in
+    b1 && b2, u1 || u2, Tiif(e', i1', i2')
+  | _, _, Iexpr(sp, ep, Eprint l as e) ->
+    if not fmt then
+      raise (Decl_error ((sp, ep, str_of_expr e), "fmt not imported."));
+    false, true, Tiprint (List.map (type_expr f_env s_env env) l)
+  | _, _, Iexpr e ->
+    false, false, Tiexpr(type_expr f_env s_env env e)
   | _, _, Iincr e ->
     let (t, _) as e' = type_left_expr f_env s_env env e in
     if t <> Tint then
       raise (Typing_error (e, [t], [Tint]));
-    Tiincr(e')
+    false, false, Tiincr(e')
   | _, _, Idecr e ->
     let (t, _) as e' = type_left_expr f_env s_env env e in
     if t <> Tint then
       raise (Typing_error (e, [t], [Tint]));
-    Tidecr(e')
+    false, false, Tidecr(e')
   | _, _, Ifor(e, i) ->
     let (t, _) as e' = type_expr f_env s_env env e in
     if t <> Tbool then
       raise (Typing_error (e, [t], [Tbool]));
-    Tifor(e', type_instr f_env s_env env i)
+    let _, u, i' = type_instr f_env s_env env r v fmt i in
+    false, u, Tifor(e', i')
   | _, _, Iassoc(l1, [_, _, Ecall _]) -> assert false
-  | sp, ep, Iassoc(l1, l2) as i->
+  | sp, ep, Iassoc(l1, l2) as i ->
     if List.length l1 <> List.length l2 then
       raise (Decl_error
                ((sp, ep, str_of_instr i),
-                "both sides of = must have the same number of expressions"));
-    let l1' = List.map (type_expr f_env s_env env) l1 in
+                "both sides of = must have the same number of expressions."));
+    let l1' = List.map (type_left_expr f_env s_env env) l1 in
     let l2' = List.map (type_expr f_env s_env env) l2 in
-    Tiassoc(l1', l2')
-  | _, _, Ivar(l1, None, l2) -> assert false
+    false, false, Tiassoc(l1', l2')
+  | _, _, Ivar(l1, None, [_, _, Ecall _]) -> assert false
+  | sp, ep, Ivar(l1, None, l2) as i ->
+    if List.length l1 <>List.length l2 then
+      raise (Decl_error
+               ((sp, ep, str_of_instr i),
+                "both sides of := must have the same number of expressions."));
+    let l' = List.fold_left2
+               (fun l x (sp', ep', _ as e) ->
+                  let (t, _) as e' = type_expr f_env s_env env e in
+                  if t = Tnil then
+                    raise (Decl_error ((sp', ep', str_of_expr e),
+                                       "use of untyped nil."));
+                  add_var x t env;
+                  e'::l) [] l1 l2 in
+    false, false, Tivar(l1, None, List.rev l')
+  | _, _, Ivar(l1, Some t, [_, _, Ecall _]) -> assert false
+  | _, _, Ivar(l1, Some t, l2) ->  assert false
+  | _, _, Ireturn [_, _, Ecall _] -> assert false
   | sp, ep, Ireturn l as e_r ->
-    begin
-      match Smap.find "0" env with
-        | Tlist r ->
-          if (List.length l <> List.length r) then
-              raise (Decl_error ((sp, ep, str_of_instr e_r),
-                                 (string_of_int (List.length r))^
-                                 " values must be returned"));
-          let l' = List.fold_left2
-                     (fun lis t1 e ->
-                        let (t2, _) as e' = type_expr f_env s_env env e in
-                        if t1 <> t2 then
-                          raise (Typing_error (e, [t2], [t1]));
-                        e'::lis) [] r l in
-          Tireturn (List.rev l')
-        | _ -> assert false
-    end
-  | _ -> assert false
+    if (List.length l <> List.length r) then
+      raise (Decl_error ((sp, ep, str_of_instr e_r),
+                         (string_of_int (List.length r))^
+                         " values must be returned"));
+    let l' = List.fold_left2
+               (fun lis t1 e ->
+                  let (t2, _) as e' = type_expr f_env s_env env e in
+                  if t1 <> t2 then
+                    raise (Typing_error (e, [t2], [t1]));
+                  e'::lis) [] r l in
+    true, false, Tireturn (List.rev l')
 
 and type_call f_env s_env env = function
   | _, _, Ecall((_, _, "new"), [sp, ep, Evar s]) ->
@@ -211,10 +262,10 @@ and type_call f_env s_env env = function
       raise (Decl_error ((sp, ep, s), "Undefined type"))
   | sp, ep, Ecall((_, _, "new"), _) as e ->
     let s = str_of_expr e in
-    raise (Decl_error ((sp, ep, s), "new must be called on a structure"))
+    raise (Decl_error ((sp, ep, s), "new must be called on a structure."))
   | _ -> assert false
 
-let check_file (fmt_imported, l) =
+let check_file (fmt, l) =
   (* On ajoute toutes les structures *)
   let add_struct l = function
     | Dstruct(s, _) ->
@@ -240,17 +291,31 @@ let check_file (fmt_imported, l) =
       f_m, Smap.add s' vars s_m
   in
   let f_env, s_env = List.fold_left add_env (Smap.empty, Smap.empty) l in
+  if not (Smap.mem "main" f_env) then
+    raise (Main_error "a main function must be declared.");
+  let r, a = Smap.find "main" f_env in
+  if r <> [] then
+    raise (Main_error "main function cannot return anything.");
+  if a <> Smap.empty then
+    raise (Main_error "main function cannot take arguments.");
+  let fmt' = ref false in
   let check_func = function
     | Dfunc((_, _, f') as f, v, t, b) ->
       let r, env = Smap.find f' f_env in
-      let b' = type_instr f_env s_env (Smap.add "0" (Tlist r) env) b in
+      let env' = Smap.map (fun x -> x, true, (d_pos, d_pos)) env in
+      let ret, fu, b' = type_instr f_env s_env (ref env') r v_types fmt b in
+      fmt' := !fmt' || fu;
+      if r != [] && not ret then
+        raise (Decl_error (f, "this function must return a value."));
       Tdfunc(f, v, t, b')
     | Dstruct(s, v) -> Tdstruct(s, v)
   in
   let l' = List.map check_func l in
+  if fmt && (not !fmt') then
+    raise (Import_error "fmt imported but not used.");
   let check_recur s_env =
     ()
   in
   check_recur s_env;
-  (fmt_imported, l')
+  l'
 
