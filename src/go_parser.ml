@@ -4247,7 +4247,7 @@ and _menhir_goto_list_decl_ : _menhir_env -> 'ttv_tail -> _menhir_state -> 'tv_l
 # 4248 "go_parser.ml"
             ) = 
 # 99 "go_parser.mly"
-    (if id <> "main" || s <> "\"fmt\"" then
+    (if id <> "main" || s <> "fmt" then
        raise Error
      else
        (true, decls))

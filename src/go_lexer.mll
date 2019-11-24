@@ -18,6 +18,10 @@ let () = List.iter (fun (s, t) -> Hashtbl.add keywords s t)
 let decimal s =
   try Int64.to_string (Int64.of_string (String.lowercase_ascii s)) with
   | Failure _ -> raise (Lexing_error "Range exceeded for int litteral")
+
+let trim s =
+  let n = String.length s in
+  String.sub s 1 (n - 2)
 }
 
 let digit = ['0'-'9']
@@ -43,7 +47,7 @@ rule token = parse
   | "//" {l_comment lexbuf}
   | "/*" {m_comment lexbuf}
   | integer as i {ins := true; INT (decimal i)}
-  | str as s {ins := true; STRING s}
+  | str as s {ins := true; STRING (trim s)}
   | ident as id {try
                    let t = Hashtbl.find keywords id in
                    ins := List.mem t [FALSE; NIL; RETURN; TRUE];

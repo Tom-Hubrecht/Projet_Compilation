@@ -96,7 +96,7 @@ file:
      else
        (false, decls)}
 | PACKAGE id = IDENT ";" IMPORT s = STRING ";" decls = decl* EOF
-    {if id <> "main" || s <> "\"fmt\"" then
+    {if id <> "main" || s <> "fmt" then
        raise Error
      else
        (true, decls)}
