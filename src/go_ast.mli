@@ -48,7 +48,7 @@ type r_expr =
   | Tevar of raw_ident
   | Teattr of t_expr * raw_ident
   | Tecall of raw_ident * r_expr list
-  | Tenew of raw_ident
+  | Tenew of raw_v_type
   | Teunop of unop * t_expr
   | Tebinop of binop * t_expr * t_expr
 and t_expr = raw_v_type * r_expr
