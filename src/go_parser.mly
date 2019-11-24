@@ -230,7 +230,6 @@ bloc:
 | "{" i = separated_nonempty_list(";", instr)  "}"
     {match filter i with
      | [] -> $startpos, $endpos, Iempty
-     | [_, _, x] -> $startpos, $endpos, x
      | _ -> $startpos, $endpos, Ibloc i}
 ;
 
