@@ -70,7 +70,7 @@ let rec p_expr fmt = function
 
 let rec p_instr fmt (_, _, i) = match i with
   | Iempty -> ()
-  | Ibloc b -> fprintf fmt "@,{@[<v 2>@,%a@]@,}" (p_list "" p_instr) b
+  | Ibloc b -> fprintf fmt "{@[<v 2>%a@]}" (p_list "" p_instr) b
   | Iif(e, i, (_, _, Iempty)) ->
     fprintf fmt "@[<v 2>if %a then@,%a@]" p_expr e p_instr i
   | Iif(e, i1, i2) ->
@@ -95,7 +95,7 @@ let rec p_instr fmt (_, _, i) = match i with
 let p_var fmt (l, t) = fprintf fmt "%a %a" (p_list ", " p_ident) l p_l_type t
 
 let p_func fmt (f, l, t, i) =
-  fprintf fmt "func %a(%a) %a@,{@[<v 2>%a@]@,}"
+  fprintf fmt "func %a(%a) %a%a"
     p_ident f (p_list ", " p_var) l p_l_r_type t p_instr i
 
 let p_struct fmt (s, l) =
