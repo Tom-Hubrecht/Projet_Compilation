@@ -33,7 +33,7 @@ let rec p_type fmt = function
   | Pointer t -> fprintf fmt "*%a" p_type t
   | Tlist _ -> ()
   | Tnil -> ()
-  | Tnoop -> ()
+  | Tall -> ()
 
 let p_r_type fmt = fprintf fmt "@[(%a)@]" (p_list ", " p_type)
 

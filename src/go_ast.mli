@@ -6,7 +6,7 @@ type raw_ident = string
 type ident = Lexing.position * Lexing.position * raw_ident
 
 type raw_v_type =
-  | Tint | Tbool | Tstring | Tnil | Tnoop
+  | Tint | Tbool | Tstring | Tnil | Tall
   | Tstruct of string
   | Pointer of raw_v_type
   | Tlist of raw_v_type list
@@ -48,6 +48,7 @@ type r_expr =
   | Tevar of raw_ident
   | Teattr of t_expr * raw_ident
   | Tecall of raw_ident * r_expr list
+  | Tecomp of raw_ident * r_expr
   | Tenew of raw_v_type
   | Teunop of unop * t_expr
   | Tebinop of binop * t_expr * t_expr
@@ -72,6 +73,7 @@ type t_instr =
   | Tiif of t_expr * t_instr * t_instr
   | Tiprint of t_expr list
   | Tiexpr of t_expr
+  | Tiexec of r_expr
   | Tiincr of t_expr
   | Tidecr of t_expr
   | Tifor of t_expr * t_instr
