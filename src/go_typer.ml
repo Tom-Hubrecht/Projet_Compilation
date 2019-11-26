@@ -2,7 +2,6 @@
 (* Analyse du typage d'un fichier Petit Go *)
 
 open Go_ast
-open Go_printer
 open Format
 
 exception Typing_error of expr * raw_r_type * raw_r_type
@@ -12,11 +11,14 @@ exception Nil_error of expr
 exception Left_error of expr
 exception Import_error of string
 exception Main_error of string
+exception Length_expr_error of int * expr list
+exception Length_ident_error of int * ident list
 
 module Smap = Map.Make(String)
 
 let str_of_expr = Go_printer.p_str Go_printer.p_expr
 let str_of_instr = Go_printer.p_str Go_printer.p_instr
+let str_of_type = Go_printer.p_str Go_printer.p_type
 
 let a_decl = " is already declared"
 
@@ -147,7 +149,9 @@ and type_expr f_env s_env env = function
           begin
             match t1, t2 with
               | Tnil, Tnil -> raise (Nil_error e)
-              | Tnil, Pointer _ | Pointer _, Tnil | _, _ when t1 = t2 ->
+              | Tnil, Pointer _ | Pointer _, Tnil ->
+                (Tbool, Tebinop (b, e1', e2'))
+              | _ when t1 = t2 ->
                 (Tbool, Tebinop(b, e1', e2'))
               | _ -> raise (Typing_error (e1, [t1], [t2]));
           end
@@ -181,14 +185,14 @@ and type_expr f_env s_env env = function
 
 (* type_instr returns the new AST & true if a value is returned,
  * false otherwise *)
-and type_instr f_env s_env env r v fmt = function
+and type_instr f_env s_env env ret v fmt = function
   | _, _, Iempty ->
     false, false, Tiempty
   | _, _, Ibloc l ->
     let b = ref false and u = ref false in
     let l' = List.fold_left
                (fun l' i ->
-                  let b', u', i' = type_instr f_env s_env env r v fmt i in
+                  let b', u', i' = type_instr f_env s_env env ret v fmt i in
                   b := !b || b';
                   u := !u || u';
                   i'::l') [] l in
@@ -204,8 +208,8 @@ and type_instr f_env s_env env r v fmt = function
     if t <> Tbool then
       raise (Typing_error (e, [t], [Tbool]));
     let env1 = ref !env and env2 = ref !env in
-    let b1, u1, i1' = type_instr f_env s_env env1 r v fmt i1 in
-    let b2, u2, i2' = type_instr f_env s_env env2 r v fmt i2 in
+    let b1, u1, i1' = type_instr f_env s_env env1 ret v fmt i1 in
+    let b2, u2, i2' = type_instr f_env s_env env2 ret v fmt i2 in
     b1 && b2, u1 || u2, Tiif(e', i1', i2')
   | _, _, Iexpr(sp, ep, Eprint l as e) ->
     if not fmt then
@@ -227,7 +231,7 @@ and type_instr f_env s_env env r v fmt = function
     let (t, _) as e' = type_expr f_env s_env env e in
     if t <> Tbool then
       raise (Typing_error (e, [t], [Tbool]));
-    let _, u, i' = type_instr f_env s_env env r v fmt i in
+    let _, u, i' = type_instr f_env s_env env ret v fmt i in
     false, u, Tifor (e', i')
   | _, _, Iassoc(l1, [sp, ep, Ecall (f, l) as e]) ->
     let r, e' = type_call f_env s_env env (f, l) in
@@ -235,22 +239,32 @@ and type_instr f_env s_env env r v fmt = function
       raise (Decl_error ((sp, ep, str_of_expr e),
                          "this function is expected to return"^
                             (string_of_int (List.length l1)^"values.")));
-    (* TODO compute new lists *)
-    false, false, Tiassoc([], [])
+    let l1' = List.fold_left2
+                (fun l' e1 t ->
+                   let (t', _) as e1' = type_left_expr f_env s_env env e1 in
+                   if not (compatible (t', t)) then
+                     raise (Typing_error (e1, [t'], [t]));
+                   e1'::l') [] l1 r in
+    false, false, Tiassoc(l1', [Tlist r, e'])
   | sp, ep, Iassoc(l1, l2) as i ->
     if List.length l1 <> List.length l2 then
       raise (Decl_error
                ((sp, ep, str_of_instr i),
                 "both sides of = must have the same number of expressions."));
     let l1', l2' = List.fold_left2
-      (fun (l1'', l2'') e1 e2 ->
-         let (t1, _) as e1' = type_left_expr f_env s_env env e1 in
-         let (t2, _) as e2' = type_expr f_env s_env env e2 in
-         if not (compatible (t1, t2)) then
-           raise (Typing_error (e2, [t2], [t2]));
-         e1'::l1'', e2'::l2'') ([], []) l1 l2 in
+                     (fun (l1'', l2'') e1 e2 ->
+                        let (t1, _) as e1' = type_left_expr f_env s_env env e1 in
+                        let (t2, _) as e2' = type_expr f_env s_env env e2 in
+                        if not (compatible (t1, t2)) then
+                          raise (Typing_error (e2, [t2], [t2]));
+                        e1'::l1'', e2'::l2'') ([], []) l1 l2 in
     false, false, Tiassoc(l1', l2')
-  | _, _, Ivar(l1, None, [_, _, Ecall _]) -> assert false
+  | _, _, Ivar(l1, None, [_, _, Ecall (f, l)]) ->
+    let r, e' = type_call f_env s_env env (f, l) in
+    if List.length r <> List.length l1 then
+      raise (Length_ident_error (List.length r, l1));
+    List.iter2 (fun x t -> add_var x t env) l1 r;
+    false, false, Tivar (l1, None, [Tlist r, e'])
   | sp, ep, Ivar(l1, None, l2) as i ->
     if List.length l1 <> List.length l2 then
       raise (Decl_error
@@ -264,8 +278,19 @@ and type_instr f_env s_env env r v fmt = function
                                        "use of untyped nil."));
                   add_var x t env;
                   e'::l) [] l1 l2 in
-    false, false, Tivar(l1, None, List.rev l')
-  | _, _, Ivar(l1, Some t, [_, _, Ecall _]) -> assert false
+    false, false, Tivar (l1, None, List.rev l')
+  | _, _, Ivar(l1, Some t, [_, _, Ecall (f, l)]) ->
+    let t' = check_type v t in
+    let r, e' = type_call f_env s_env env (f, l) in
+    if List.length r <> List.length l1 then
+      raise (Length_ident_error (List.length r, l1));
+    List.iter2
+      (fun x t ->
+         if not (compatible (t', t)) then
+           raise (Decl_error (f, "this function is expected to return only "^
+                                 "values of type "^(str_of_type t')));
+        add_var x t env) l1 r;
+    false, false, Tivar (l1, None, [Tlist r, e'])
   | _, _, Ivar(l1, Some t, []) ->
     let t' = check_type v t in
     List.iter (fun x -> add_var x t' env) l1;
@@ -284,18 +309,23 @@ and type_instr f_env s_env env r v fmt = function
                   add_var x t env;
                   e'::l) [] l1 l2 in
     false, false, Tivar(l1, None, List.rev l')
-  | _, _, Ireturn [_, _, Ecall _] -> assert false
+  | _, _, Ireturn [_, _, Ecall (f, l) as e] ->
+    let r, e' = type_call f_env s_env env (f, l) in
+    if r <> ret then
+      raise (Typing_error (e, r, ret));
+    true, false, Tireturn [Tlist r, e']
+
   | sp, ep, Ireturn l as e_r ->
-    if (List.length l <> List.length r) then
+    if (List.length l <> List.length ret) then
       raise (Decl_error ((sp, ep, str_of_instr e_r),
-                         (string_of_int (List.length r))^
+                         (string_of_int (List.length ret))^
                          " values must be returned"));
     let l' = List.fold_left2
                (fun lis t1 e ->
                   let (t2, _) as e' = type_expr f_env s_env env e in
-                  if t1 <> t2 then
+                  if not (compatible (t1, t2)) then
                     raise (Typing_error (e, [t2], [t1]));
-                  e'::lis) [] r l in
+                  e'::lis) [] ret l in
     true, false, Tireturn (List.rev l')
 
 (* type_call returns the list of types returned and the transformed AST *)
@@ -337,7 +367,7 @@ and type_call f_env s_env env = function
     let l' = List.fold_left2
                (fun lis t1 e ->
                   let t2, e' = type_expr f_env s_env env e in
-                  if t1 <> t2 then
+                  if not (compatible (t1, t2)) then
                     raise (Typing_error (e, [t2], [t1]));
                   e'::lis) [] a l in
     r, Tecall (f', (List.rev l'))
