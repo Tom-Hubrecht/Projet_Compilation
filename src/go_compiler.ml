@@ -17,7 +17,7 @@ let spec =
   [
     "--parse-only", Arg.Set parse_only, " stop after parsing";
     "--type-only", Arg.Set type_only, " stop after typing";
-    "--print-tree", Arg.Set print_tree, " displays the ast"
+    "-p", Arg.Set print_tree, " displays the ast"
   ]
 
 let file =
