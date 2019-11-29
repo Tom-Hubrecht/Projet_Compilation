@@ -4,10 +4,12 @@
 {
 open Lexing
 open Go_parser
+open Int64
 
 exception Lexing_error of string
 
 let ins = ref false
+let neg = ref false
 
 let keywords = Hashtbl.create 13
 let () = List.iter (fun (s, t) -> Hashtbl.add keywords s t)
@@ -15,10 +17,19 @@ let () = List.iter (fun (s, t) -> Hashtbl.add keywords s t)
      "import", IMPORT; "nil", NIL; "package", PACKAGE; "return", RETURN;
      "struct", STRUCT; "true", TRUE; "type", TYPE; "var", VAR;]
 
+(* Transforms a 64bit stringed integer into a decimal *)
 let decimal s =
-  try Int64.to_string (Int64.of_string (String.lowercase_ascii s)) with
-  | Failure _ -> raise (Lexing_error "Range exceeded for int litteral")
+  let s' = (if !neg then "-"^s else s) in
+  try
+    let i = to_string (of_string (String.lowercase_ascii s')) in
+    if !neg then
+      String.sub i 1 ((String.length i) - 1)
+    else
+      i
+  with
+  | Failure _ -> raise (Lexing_error "Range exceeded for int litteral.")
 
+(* Only store the content of the string without the double quotes *)
 let trim s =
   let n = String.length s in
   String.sub s 1 (n - 2)
@@ -28,75 +39,134 @@ let digit = ['0'-'9']
 let alpha = ['a'-'z' 'A'-'Z' '_']
 let ident = alpha (alpha | digit)*
 let hexa = ['0'-'9' 'a'-'f' 'A'-'F']
-let min_int = "-9223372036854775808" | (("0x" | "0X") "8000000000000000")
-let integer = digit* | (("0x" | "0X") hexa+) | min_int
-let e_c = "\\" '"'
+let integer = digit* | (("0x" | "0X") hexa+)
+let e_c = "\\" "\""
 let car = [' ' '!' '#'-'[' ']'-'~' '\\' '\n' '\t' ] | e_c
 let str = '"' car* '"'
 
-rule token = parse
-  | [' ' '\t']+ {token lexbuf}
+(* General lexer *)
+rule token_raw = parse
+  | [' ' '\t']+ {token_raw lexbuf}
   | '\n' {new_line lexbuf;
           if !ins then
-            begin
-              ins := false;
               SEMICOLON
-            end
           else
-            token lexbuf}
+            token_raw lexbuf}
   | "//" {l_comment lexbuf}
   | "/*" {m_comment lexbuf}
-  | integer as i {ins := true; INT (decimal i)}
-  | str as s {ins := true; STRING (trim s)}
-  | ident as id {try
-                   let t = Hashtbl.find keywords id in
-                   ins := List.mem t [FALSE; NIL; RETURN; TRUE];
-                   t
-                 with Not_found -> ins := true; IDENT id}
-  | "++" {ins := true; INC}
-  | "--" {ins := true; DEC}
-  | "&&" {ins := false; AND}
-  | "||" {ins := false; OR}
-  | "==" {ins := false; EQ}
-  | "!=" {ins := false; NEQ}
-  | "<=" {ins := false; LTEQ}
-  | ">=" {ins := false; GTEQ}
-  | "<" {ins := false; LT}
-  | ">" {ins := false; GT}
-  | "=" {ins := false; ALLOC}
-  | "!" {ins := false; NOT}
-  | "&" {ins := false; AMP}
-  | "+" {ins := false; PLUS}
-  | "-" {ins := false; MINUS}
-  | "*" {ins := false; TIMES}
-  | "/" {ins := false; DIV}
-  | "%" {ins := false; MOD}
-  | "." {ins := false; DOT}
-  | "," {ins := false; COMMA}
-  | ";" {ins := false; SEMICOLON}
-  | "(" {ins := false; LPAR}
-  | "{" {ins := false; LBRA}
-  | "}" {ins := true; RBRA}
-  | ")" {ins := true; RPAR}
-  | ":=" {ins := false; DEF}
-  | eof {ins := false; EOF}
+  | integer as i {INT (decimal i)}
+  | str as s {STRING (trim s)}
+  | ident as id {try Hashtbl.find keywords id with Not_found -> IDENT id}
+  | "++" {INC}
+  | "--" {DEC}
+  | "&&" {AND}
+  | "||" {OR}
+  | "==" {EQ}
+  | "!=" {NEQ}
+  | "<=" {LTEQ}
+  | ">=" {GTEQ}
+  | "<" {LT}
+  | ">" {GT}
+  | "=" {ALLOC}
+  | "!" {NOT}
+  | "&" {AMP}
+  | "+" {PLUS}
+  | "-" {MINUS}
+  | "*" {TIMES}
+  | "/" {DIV}
+  | "%" {MOD}
+  | "." {DOT}
+  | "," {COMMA}
+  | ";" {SEMICOLON}
+  | "(" {LPAR}
+  | "{" {LBRA}
+  | "}" {RBRA}
+  | ")" {RPAR}
+  | ":=" {DEF}
+  | eof {EOF}
   | _ {raise (Lexing_error "Syntax error, illegal character")}
 
+(* Filters line comments *)
 and l_comment = parse
   | '\n' {new_line lexbuf;
           if !ins then
-            begin
-              ins := false;
               SEMICOLON
-            end
           else
-            token lexbuf}
+            token_raw lexbuf}
   | eof {EOF}
   | _ {l_comment lexbuf}
 
+(* Filters multiline comments *)
 and m_comment = parse
   | '\n' {new_line lexbuf; m_comment lexbuf}
-  | "*/" {token lexbuf}
+  | "*/" {token_raw lexbuf}
   | eof {raise (Lexing_error "Unfinished comment")}
   | _ {m_comment lexbuf}
 
+{
+let prec = ref EOF
+let next = ref []
+
+(* Do we need to insert a semicolon if we parse \n *)
+let insert = function
+  | IDENT _ | INT _ | STRING _
+  | TRUE | FALSE | NIL | RETURN
+  | INC | DEC
+  | RPAR | RBRA -> true
+  | _ -> false
+
+(* Start to reduce a chain of - into only one if the the last token is
+ * PLUS, TIMES, DIV, LPAR, LBRA, DEF, ALLOC, AND, OR, EQ, NEQ, LTEQ, GTEQ, LT,
+ * GT*)
+let track_neg () =
+  List.mem !prec
+    [AND; OR; EQ; NEQ; LTEQ; GTEQ; LT; GT; ALLOC; PLUS; TIMES; DIV; MOD;
+     COMMA; SEMICOLON; LPAR; LBRA; DEF;]
+
+(* Wrapper around the lexer to check negative integers and insert semicolons *)
+let token lexbuf =
+  match !next with
+    | [] ->
+      begin
+        let t = token_raw lexbuf in
+        if t = MINUS then
+          begin
+            ins := false;
+            (* Start to reduce the chained minuses if need be *)
+            let seq = ref (track_neg ()) in
+            let t' = ref MINUS in
+            while !seq do
+              neg := not !neg;
+              t' := token_raw lexbuf;
+              if !t' <> MINUS then
+                  (* We recognized - T or T so we stop *)
+                  seq := false;
+            done;
+            (* If we recogized T return T,
+             * otherwise store T  and return MINUS *)
+            if !neg then
+              begin
+                prec := MINUS;
+                next := [!t'];
+                MINUS
+              end
+            else
+              begin
+                prec := !t';
+                !t'
+              end
+          end
+        else
+          begin
+            ins := insert t;
+            neg := false;
+            prec := t;
+            t
+          end
+      end
+    | t::q ->
+      ins := insert t;
+      prec := t;
+      next := q;
+      t
+}
