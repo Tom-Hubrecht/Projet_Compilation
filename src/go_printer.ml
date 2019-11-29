@@ -35,7 +35,7 @@ let rec p_type fmt = function
   | Tnil -> ()
   | Tall -> ()
 
-let p_r_type fmt = fprintf fmt "@[(%a)@]" (p_list ", " p_type)
+let p_r_type fmt = fprintf fmt "(%a)" (p_list ", " p_type)
 
 let rec p_l_type fmt (_, _, t) = p_type fmt t
 

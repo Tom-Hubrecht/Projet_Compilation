@@ -64,19 +64,19 @@ let () =
       eprintf "this expression has type %a but is expected to have type %a.@."
         p_r_type r1 p_r_type r2;
       exit 1
-    | Go_typer.Decl_error(i, s) ->
+    | Go_typer.Decl_error (i, s) ->
       report i;
       eprintf "%s@." s;
       exit 1
-    | Go_typer.Field_error((_, _, i) as e, t) ->
+    | Go_typer.Field_error ((_, _, i) as e, t) ->
       report e;
       eprintf "the type %a does not have a field %s.@." p_type t i;
       exit 1
-    | Go_typer.Nil_error((sp, ep, _) as e) ->
+    | Go_typer.Nil_error ((sp, ep, _) as e) ->
       report (sp, ep, (p_str p_expr e));
       eprintf "the operation nil==nil is not defined.@.";
       exit 1
-    | Go_typer.Left_error((sp, ep, _) as e) ->
+    | Go_typer.Left_error ((sp, ep, _) as e) ->
       report (sp, ep, (p_str p_expr e));
       eprintf "This expression is not a left value.@.";
       exit 1
@@ -85,6 +85,14 @@ let () =
       exit 1
     | Go_typer.Main_error s ->
       eprintf "%s@." s;
+      exit 1
+    | Go_typer.Length_expr_error (k, l, sp, ep) ->
+      report (sp, ep, (p_str (p_list ", " p_expr) l));
+      eprintf "%d values expected but %d given." k (List.length l);
+      exit 1
+    | Go_typer.Recursive_error s ->
+      report s;
+      eprintf "this structure has a recursive definition.@.";
       exit 1
     | e ->
       eprintf "Anomaly: %s\n@." (Printexc.to_string e);
