@@ -27,11 +27,18 @@ setup.log
 *.automaton
 *.conflicts
 
+# Parser and lexer .ml files
+go_lexer.ml
+go_parser.ml
+
 # Compiler
 pgoc
 
 # Dependencies are rebuilt each time
 .depend
+
+# Small test file
+test.go
 
 # Vim session
 go.vim
