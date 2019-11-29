@@ -27,7 +27,7 @@ let a_decl = " is already declared."
 
 let d_pos = Lexing.dummy_pos
 
-(* checks if a structure has a recursive definition *)
+(* Checks if a structure has a recursive definition *)
 let check_recur s_env p_env =
   let rec aux s vis =
     if Smap.mem s vis then
@@ -50,7 +50,7 @@ let check_recur s_env p_env =
   in
   Smap.fold (fun s _ v -> aux s v) s_env Smap.empty
 
-(* extracts the type from a string *)
+(* Extracts the type from a string *)
 let type_of_str (_, _, s as s') s_env =
   let n = String.length s in
   let rec aux i = match s.[i] with
@@ -72,12 +72,12 @@ let type_of_str (_, _, s as s') s_env =
       end
   in aux 0
 
-(* extracts the name of a structure *)
+(* Extracts the name of a structure *)
 let id_of_type = function
   | s, e, Tstruct t -> s, e, t
   | _ -> assert false
 
-(* checks if the type t is valid in v *)
+(* Checks if the type t is valid in v *)
 let rec check_type v = function
   | sp, ep, Pointer t -> Pointer (check_type v (sp, ep, t))
   | _, _, t' as t->
@@ -86,14 +86,14 @@ let rec check_type v = function
     else
       raise (Decl_error (id_of_type t, "undefined structure."))
 
-(* checks if the r_type l is only composed of types from v *)
+(* Checks if the r_type l is only composed of types from v *)
 let rec check_r_type v = function
   | [] -> []
   | t::q ->
     let q' = check_r_type v q in
     (check_type v t)::q'
 
-(* returns an Smap and a r_type representing the input types *)
+(* Returns an Smap and a r_type representing the input types *)
 let rec get_var_type v = function
   | [] -> [], Smap.empty
   | (l, t)::q ->
@@ -107,27 +107,27 @@ let rec get_var_type v = function
            t'::l', Smap.add x' t' m)
       (get_var_type v q) l
 
-(* checks that a value of type t2 can be assigned to a value of type t1 *)
+(* Checks that a value of type t2 can be assigned to a value of type t1 *)
 let compatible = function
   | Pointer _, Tnil
   | Tall, _ -> true
   | t1, t2 when t1 = t2 -> true
   | _ -> false
 
-(* returns the type of a constant *)
+(* Returns the type of a constant *)
 let type_cst = function
   | Cint x -> Tint, Cint x
   | Cstring s -> Tstring, Cstring s
   | Cbool b -> Tbool, Cbool b
   | Cnil -> Tnil, Cnil
 
-(* create the environment from the args *)
+(* Create the environment from the args *)
 let create_env args =
   let env = Hashtbl.create 0 in
   Smap.iter (fun x t -> Hashtbl.add env (x, 0) (t, true, (d_pos, d_pos))) args;
   env
 
-(* add a variable with a level lev to the environment *)
+(* Add a variable with a level lev to the environment *)
 let add_var (sp, ep, x' as x) t env lev =
   if x' <> "_" then
     begin
@@ -136,7 +136,7 @@ let add_var (sp, ep, x' as x) t env lev =
       Hashtbl.add env (x', lev) (t, false, (sp, ep))
     end
 
-(* marks the var x as used in regards to the level *)
+(* Marks the var x as used in regards to the level *)
 let rec use_var (_, _, x' as x) env = function
   | -1 -> raise (Decl_error (x, "undefined variable."))
   | l ->
@@ -144,31 +144,31 @@ let rec use_var (_, _, x' as x) env = function
       begin
         let t, _, p = Hashtbl.find env (x', l) in
         Hashtbl.replace env (x', l) (t, true, p);
-        t
+        t, l
       end
     else
       use_var x env (l - 1)
 
-(* type a left expression and raise an error if the expr is not a left value *)
+(* Type a left expression and raise an error if the expr is not a left value *)
 let rec type_left_expr f_env s_env env lev = function
-  | _, _, Evar "_" -> (Tall, Tevar "_")
+  | _, _, Evar "_" -> Tall, Tevar ("_", 0)
   | sp, ep, Evar x ->
-    let t = use_var (sp, ep, x) env lev in
-    t, Tevar x
+    let t, l = use_var (sp, ep, x) env lev in
+    t, Tevar (x, l)
   | _, _, Eattr(e, _) as e1 ->
     let _ = type_left_expr f_env s_env env lev e in
     type_expr f_env s_env env lev e1
   | _, _, Eunop(Uref, _) as e -> type_expr f_env s_env env lev e
   | e -> raise (Left_error e)
 
-(* type an expression *)
+(* Type an expression *)
 and type_expr f_env s_env env lev = function
   | _, _, Ecst x -> let t, c = type_cst x in t, Tecst x
   | sp, ep, Evar "_" ->
     raise (Decl_error ((sp, ep, "_"), "cannot use _ as a value"))
   | sp, ep, Evar x ->
-    let t = use_var (sp, ep, x) env lev in
-    t, Tevar x
+    let t, l = use_var (sp, ep, x) env lev in
+    t, Tevar (x, l)
   | _, _, Eattr(e, (_, _, i' as i)) ->
     begin
       let (t, _) as e' = type_expr f_env s_env env lev e in
@@ -245,7 +245,7 @@ and type_expr f_env s_env env lev = function
     let i = sp, ep, str_of_expr e in
     raise (Decl_error (i, "fmt.Print has no type and cannot be used here."))
 
-(* type_instr returns the new AST & true if a value is returned,
+(* Type_instr returns the new AST & true if a value is returned,
  * false otherwise *)
 and type_instr f_env s_env env ret v fmt lev = function
   | _, _, Iempty ->
@@ -396,7 +396,7 @@ and type_instr f_env s_env env ret v fmt lev = function
                   e'::lis) [] ret l in
     true, false, Tireturn (List.rev l')
 
-(* type_call returns the list of types returned and the transformed AST *)
+(* Type_call returns the list of types returned and the transformed AST *)
 and type_call f_env s_env env lev = function
   | (_, _, "new"), [sp, ep, Evar s] ->
     let t = type_of_str (sp, ep, s) s_env in

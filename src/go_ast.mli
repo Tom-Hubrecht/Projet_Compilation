@@ -45,7 +45,7 @@ and expr = Lexing.position * Lexing.position * raw_expr
 
 type r_expr =
   | Tecst of constant
-  | Tevar of raw_ident
+  | Tevar of raw_ident * int
   | Teattr of t_expr * raw_ident
   | Tecall of raw_ident * r_expr list
   | Tecomp of raw_ident * r_expr
