@@ -155,14 +155,6 @@ let rec type_left_expr f_env s_env env lev = function
   | sp, ep, Evar x ->
     let t = use_var (sp, ep, x) env lev in
     t, Tevar x
-    (*if Smap.mem x !env then
-      begin
-        let t, _, p = Smap.find x !env in
-        env := Smap.add x (t, true, p) !env;
-        t, Tevar x
-      end
-    else
-      raise (Decl_error ((sp, ep, x), "undefined variable."))*)
   | _, _, Eattr(e, _) as e1 ->
     let _ = type_left_expr f_env s_env env lev e in
     type_expr f_env s_env env lev e1
@@ -177,14 +169,6 @@ and type_expr f_env s_env env lev = function
   | sp, ep, Evar x ->
     let t = use_var (sp, ep, x) env lev in
     t, Tevar x
-    (*if Smap.mem x !env then
-      begin
-        let t, _, p = Smap.find x !env in
-        env := Smap.add x (t, true, p) !env;
-        t, Tevar x
-      end
-    else
-      raise (Decl_error ((sp, ep, x), "undefined variable."))*)
   | _, _, Eattr(e, (_, _, i' as i)) ->
     begin
       let (t, _) as e' = type_expr f_env s_env env lev e in
