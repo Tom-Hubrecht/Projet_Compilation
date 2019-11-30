@@ -20,7 +20,7 @@ let () = List.iter (fun (s, t) -> Hashtbl.add keywords s t)
 let decimal s =
   let s' = (if !neg then "-"^s else s) in
   try
-    Int64.to_string (Int64.of_string (String.lowercase_ascii s'))
+    Int64.of_string (String.lowercase_ascii s')
   with
   | Failure _ -> raise (Lexing_error "Range exceeded for int litteral.")
 
@@ -120,7 +120,7 @@ let track_neg () =
 
 (* Match the INT _ token *)
 let is_int = function
-  | INT i -> true
+  | INT _ -> true
   | _ -> false
 
 (* Wrapper around the lexer to check negative integers and insert semicolons *)

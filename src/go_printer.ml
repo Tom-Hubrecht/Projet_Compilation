@@ -53,7 +53,7 @@ let p_unop fmt = function
 let p_binop fmt b = fprintf fmt "%s" (Hashtbl.find binop_tbl b)
 
 let p_cst fmt = function
-  | Cint s -> fprintf fmt "%s" s
+  | Cint x -> fprintf fmt "%Ld" x
   | Cstring s -> fprintf fmt "%S" s
   | Cbool b -> fprintf fmt "%B" b
   | Cnil -> fprintf fmt "nil"

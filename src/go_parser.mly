@@ -25,7 +25,7 @@ let d_pos = Lexing.dummy_pos
 
 %}
 
-%token <string> INT
+%token <int64> INT
 %token <string> STRING
 %token <string> IDENT
 

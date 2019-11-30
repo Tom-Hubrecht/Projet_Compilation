@@ -28,7 +28,7 @@ type binop =
   | Beq | Bneq | Blt | Ble | Bgt | Bge
 
 type constant =
-  | Cint of string
+  | Cint of int64
   | Cstring of string
   | Cbool of bool
   | Cnil
