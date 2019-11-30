@@ -193,6 +193,7 @@ let imull a b = ins "imull %a, %a" a () b ()
 let imulq a b = ins "imulq %a, %a" a () b ()
 
 let idivq a = ins "idivq %a" a ()
+let divq a = ins "divq %a" a ()
 let cqto = S "\tcqto\n"
 
 let notb a = ins "notb %a" a ()
