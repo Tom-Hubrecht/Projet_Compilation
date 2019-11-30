@@ -47,13 +47,15 @@ let () =
     close_in c;
     if !print_tree then print_file f;
     if !parse_only then exit 0;
-    let _ = Go_typer.check_file f in
+    let p = Go_typer.check_file f in
     if !type_only then exit 0;
+    let out = Filename.chop_suffix file ".go" ^ ".s" in
+    Go_assembler.compile_program p out;
     exit 0;
   with
     | Go_lexer.Lexing_error s ->
       report (lexeme_start_p lb, lexeme_end_p lb, lexeme lb);
-      eprintf "lexical error: %s.@." s;
+      eprintf "%s.@." s;
       exit 1
     | Go_parser.Error ->
       report (lexeme_start_p lb, lexeme_end_p lb, lexeme lb);
@@ -78,12 +80,14 @@ let () =
       exit 1
     | Go_typer.Left_error ((sp, ep, _) as e) ->
       report (sp, ep, (p_str p_expr e));
-      eprintf "This expression is not a left value.@.";
+      eprintf "this expression is not a left value.@.";
       exit 1
     | Go_typer.Import_error s ->
+      report (dummy_pos, dummy_pos, "");
       eprintf "%s@." s;
       exit 1
     | Go_typer.Main_error s ->
+      report (dummy_pos, dummy_pos, "");
       eprintf "%s@." s;
       exit 1
     | Go_typer.Length_expr_error (k, l, sp, ep) ->
