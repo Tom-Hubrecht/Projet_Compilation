@@ -4,7 +4,6 @@
 {
 open Lexing
 open Go_parser
-open Int64
 
 exception Lexing_error of string
 
@@ -21,11 +20,7 @@ let () = List.iter (fun (s, t) -> Hashtbl.add keywords s t)
 let decimal s =
   let s' = (if !neg then "-"^s else s) in
   try
-    let i = to_string (of_string (String.lowercase_ascii s')) in
-    if !neg then
-      String.sub i 1 ((String.length i) - 1)
-    else
-      i
+    Int64.to_string (Int64.of_string (String.lowercase_ascii s'))
   with
   | Failure _ -> raise (Lexing_error "Range exceeded for int litteral.")
 
@@ -123,6 +118,11 @@ let track_neg () =
     [AND; OR; EQ; NEQ; LTEQ; GTEQ; LT; GT; ALLOC; PLUS; TIMES; DIV; MOD;
      COMMA; SEMICOLON; LPAR; LBRA; DEF;]
 
+(* Match the INT _ token *)
+let is_int = function
+  | INT i -> true
+  | _ -> false
+
 (* Wrapper around the lexer to check negative integers and insert semicolons *)
 let token lexbuf =
   match !next with
@@ -143,12 +143,23 @@ let token lexbuf =
                   seq := false;
             done;
             (* If we recogized T return T,
-             * otherwise store T  and return MINUS *)
+             * if we recognized - INT i return INT -i
+             * otherwise store T and return MINUS *)
             if !neg then
               begin
-                prec := MINUS;
-                next := [!t'];
-                MINUS
+                if is_int !t' then
+                  begin
+                    prec := !t';
+                    ins := true;
+                    neg := false;
+                    !t'
+                  end
+                else
+                  begin
+                    prec := MINUS;
+                    next := [!t'];
+                    MINUS
+                  end
               end
             else
               begin
