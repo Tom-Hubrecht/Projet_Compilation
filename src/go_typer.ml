@@ -480,5 +480,5 @@ let check_file (fmt, l) =
   let l' = List.map check_func l in
   if fmt && (not !fmt') then
     raise (Import_error "fmt imported but not used.");
-  l'
+  fmt, l', s_env, f_env
 
