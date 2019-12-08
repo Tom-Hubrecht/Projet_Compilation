@@ -445,21 +445,21 @@ let check_file (fmt, l) =
   in
   let v_types = List.fold_left add_struct [Tint; Tstring; Tbool] l in
   (* On ajoute les fonctions et les champs de structure *)
-  let add_env (f_m, s_m, p_m) = function
+  let add_env (f_m, s_m, p_m, v_m) = function
     | Dfunc(f, v, t, _) ->
       let _, _, f' = f in
       if Smap.mem f' f_m then
         raise (Decl_error (f, "This function"^a_decl));
       let r, vars = get_var_type v_types v in
       let t = check_r_type v_types t in
-      Smap.add f' (t, r, vars) f_m, s_m, p_m
+      Smap.add f' (t, r, vars) f_m, s_m, p_m, v_m
     | Dstruct(s, v) ->
       let sp, ep, s' = s in
       let _, vars = get_var_type v_types v in
-      f_m, Smap.add s' vars s_m, Smap.add s' (sp, ep) p_m
+      f_m, Smap.add s' vars s_m, Smap.add s' (sp, ep) p_m, Smap.add s' v v_m
   in
-  let f_env, s_env, p_env =
-    List.fold_left add_env (Smap.empty, Smap.empty, Smap.empty) l in
+  let f_env, s_env, p_env, v_env =
+    List.fold_left add_env (Smap.empty, Smap.empty, Smap.empty, Smap.empty) l in
   let _ = check_recur s_env p_env in
   (* On vérifie que main est présente sans arguments ni valeur retournée *)
   if not (Smap.mem "main" f_env) then
@@ -486,5 +486,5 @@ let check_file (fmt, l) =
   (* On vérifie que fmt est importé si besoin *)
   if fmt && (not !fmt') then
     raise (Import_error "fmt imported but not used.");
-  fmt, l', s_env, f_env
+  fmt, l', s_env, v_env, f_env
 
