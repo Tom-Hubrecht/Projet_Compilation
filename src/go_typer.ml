@@ -245,8 +245,8 @@ and type_expr f_env s_env env lev = function
     let i = sp, ep, str_of_expr e in
     raise (Decl_error (i, "fmt.Print has no type and cannot be used here."))
 
-(* Type_instr returns the new AST & true if a value is returned,
- * false otherwise *)
+(* Type_instr returns b1, b2, a with a the new AST, b1 if a value is returned
+ * and b2 if fmt.Print was used *)
 and type_instr f_env s_env env ret v fmt lev = function
   | _, _, Iempty ->
     false, false, Tiempty
@@ -382,7 +382,6 @@ and type_instr f_env s_env env ret v fmt lev = function
     if r <> ret then
       raise (Typing_error (e, r, ret));
     true, false, Tireturn [Tlist r, e']
-
   | sp, ep, Ireturn l as e_r ->
     if (List.length l <> List.length ret) then
       raise (Decl_error ((sp, ep, str_of_instr e_r),
@@ -398,12 +397,14 @@ and type_instr f_env s_env env ret v fmt lev = function
 
 (* Type_call returns the list of types returned and the transformed AST *)
 and type_call f_env s_env env lev = function
+  (* La fonction new est traitée spécialement *)
   | (_, _, "new"), [sp, ep, Evar s] ->
     let t = type_of_str (sp, ep, s) s_env in
     [Pointer t], Tenew t
   | (sp, ep, "new") as f, e ->
     let s = str_of_expr (sp, ep, Ecall(f, e)) in
-    raise (Decl_error ((sp, ep, s), "new must be called on a structure."));
+    raise (Decl_error ((sp, ep, s), "new must be called on a structure."))
+  (* Composition de fonctions *)
   | (_, _, f') as f, [_, _, Ecall(g, l) as e] ->
     if not (Smap.mem f' f_env) then
       raise (Decl_error (f, "undefined function."));
@@ -414,9 +415,11 @@ and type_call f_env s_env env lev = function
     if List.length t <> List.length a then
       raise (Typing_error (e, t, r));
     List.iter2
-      (fun t1 t2 -> if t1 <> t2 then raise (Typing_error (e, t, r))) t a;
+      (fun t1 t2 -> if t1 <> t2 then raise (Typing_error (e, t, r)))
+      t a;
     r, Tecomp (f', eg)
-   | (sp, ep, f') as f, l ->
+  (* Cas de base des fonctions *)
+  | (sp, ep, f') as f, l ->
     if not (Smap.mem f' f_env) then
       raise (Decl_error (f, "undefined function."));
     let r, a, _ = Smap.find f' f_env in
@@ -431,7 +434,7 @@ and type_call f_env s_env env lev = function
     r, Tecall (f', (List.rev l'))
 
 let check_file (fmt, l) =
-  (* On ajoute toutes les structures *)
+  (* On ajoute toutes les structures dans la listes des types valides *)
   let add_struct l = function
     | Dstruct(s, _) ->
       let _, _, s' = s in
@@ -458,6 +461,7 @@ let check_file (fmt, l) =
   let f_env, s_env, p_env =
     List.fold_left add_env (Smap.empty, Smap.empty, Smap.empty) l in
   let _ = check_recur s_env p_env in
+  (* On vérifie que main est présente sans arguments ni valeur retournée *)
   if not (Smap.mem "main" f_env) then
     raise (Main_error "a main function must be declared.");
   let r, _, a = Smap.find "main" f_env in
@@ -465,6 +469,7 @@ let check_file (fmt, l) =
     raise (Main_error "main function cannot return anything.");
   if a <> Smap.empty then
     raise (Main_error "main function cannot take arguments.");
+  (* Typage des instructions du programme *)
   let fmt' = ref false in
   let check_func = function
     | Dfunc((_, _, f') as f, v, t, b) ->
@@ -478,6 +483,7 @@ let check_file (fmt, l) =
     | Dstruct(s, v) -> Tdstruct(s, v)
   in
   let l' = List.map check_func l in
+  (* On vérifie que fmt est importé si besoin *)
   if fmt && (not !fmt') then
     raise (Import_error "fmt imported but not used.");
   fmt, l', s_env, f_env
