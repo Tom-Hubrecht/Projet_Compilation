@@ -1,16 +1,87 @@
-\documentclass{report}
+\documentclass{article}
 
-\usepackage[french]{babel}
+\usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
-\usepackage[latin1]{inputenc}
+\usepackage[french]{babel}
+\usepackage[left=2cm, right=2cm, top=1cm, bottom=2cm]{geometry}
+\usepackage{listings}
+\usepackage{color}
 
-\usepackage{amsmath}
-\usepackage{amssymb}
-\usepackage[top=2cm, bottom=2cm]{geometry}
 
-\title{Rapport du projet de compilation}
+%% Define colors for the listings %%
+\definecolor{cred}{RGB}{255, 85, 85}
+\definecolor{cgreen}{RGB}{85, 255, 85}
+\definecolor{cblue}{RGB}{85, 85, 255}
+\definecolor{cblack}{RGB}{0, 0, 0}
+\definecolor{cwhite}{RGB}{255, 255, 255}
+
+
+%% Listing Options %%
+\lstdefinestyle{listing}{
+	backgroundcolor=\color{cwhite},
+	commentstyle=\color{cblack},
+	keywordstyle=\color{cblack}\bfseries,
+	numberstyle=\tiny\color{cblack},
+	stringstyle=\color{cblack},
+	basicstyle=\ttfamily\small,
+	breakatwhitespace=false,
+	breaklines=true,
+	captionpos=b,
+	keepspaces=true,
+	numbers=left,
+	numbersep=5pt,
+	showspaces=false,
+	showstringspaces=false,
+	showtabs=false,
+	tabsize=4
+}
+
+\lstset{style=listing}
+\lstset{language=caml}
+
 \author{Tom Hubrecht}
+\date{}
+
+\title{Rapport pour le projet de compilation}
 
 \begin{document}
-	\maketitle
+
+\maketitle
+
+Tout ce qui a été demandé pour la première partie du projet a été compltété,
+c'est à dire l'analyse lexicale, syntaxique ainsi que le typage d'un fichier
+Petit Go passé en entrée.
+
+\section{Choix techniques}
+
+\subsection{Représentation d'un programme avec des AST}
+J'ai choisi d'utiliser plusieurs types d'arbres de syntaxe abstraits (AST) pour
+réaliser le projet. En effet, le parser renvoie un AST avec la localisation de
+chaque noeud dans le fichier d'origine tandis que le typer convertit cet AST
+localisé en AST typé, i.e. avec le type de chaque expression. De plus, le typer
+transforme les appels à fmt.Print considérés par le parser comme des expressions
+en instruction.
+
+\subsection{Typage d'un programme}
+Le typage du programme se déroule à peu près comme conseillé dans le sujet.
+J'ajoute l'ensemble des structures à la liste des types valides qui sont au
+départ uniquement \lstinline.[|int; bool; string|]. J'utilise ensuite cette
+liste pour vérifier que les types présents dans le programme sont tous valides.
+Les fonctions et les structures sont ajoutées dans des
+\lstinline*Smap = Map.Make(String)* en vérifiant que tous leurs types sont
+valides. Je vérifie qu'aucune structure récursive n'est présente en effectuant
+un parcours en profondeur puis je vérifie qu'une fonction \lstinline*main* est
+présente sans arguments ni valeur retournée. Enfin, je vérifie que toutes les
+instructions du programme sont bien typées et ce faisant je construis une AST
+typé pour faciliter la production de code future.
+
+\section{Difficultées rencontrées}
+Pour vérifier que chaque variable est bien utilisée, j'avais commencé par
+stocker l'information dans une \lstinline*Smap* mais la déclaration de variables
+dans un sous-bloc posait problème, j'ai donc choisi d'utiliser une
+\lstinline*Hashtbl* où chaque variable est identifiée par son nom et sa
+profondeur dans le programme.
+
+
+
 \end{document}
