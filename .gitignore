@@ -37,6 +37,7 @@ pgoc
 # Generated files
 *.s
 *.out
+out
 
 # Dependencies are rebuilt each time
 .depend
