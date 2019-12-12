@@ -34,6 +34,10 @@ go_parser.ml
 # Compiler
 pgoc
 
+# Generated files
+*.s
+*.out
+
 # Dependencies are rebuilt each time
 .depend
 
