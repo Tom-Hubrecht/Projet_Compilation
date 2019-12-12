@@ -77,6 +77,11 @@ let id_of_type = function
   | s, e, Tstruct t -> s, e, t
   | _ -> assert false
 
+(* If a list of types has only one element then returns it *)
+let get_type = function
+  | [t] -> t
+  | l -> Tlist l
+
 (* Checks if the type t is valid in v *)
 let rec check_type v = function
   | sp, ep, Pointer t -> Pointer (check_type v (sp, ep, t))
