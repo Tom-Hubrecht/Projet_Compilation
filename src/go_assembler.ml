@@ -115,11 +115,11 @@ let fmt_print s_env v_env =
   fmt_print_base
 
 let print_labels =
-  label ".Sprint_int" ++ string "%d" ++
+  label ".Sprint_int" ++ string "%lld" ++
   label ".Sprint_false" ++ string "false" ++
   label ".Sprint_true" ++ string "true" ++
   label ".Sprint_nil" ++ string "<nil>" ++
-  label ".Sprint_pointer" ++ string "Ox%d" ++
+  label ".Sprint_pointer" ++ string "Ox%lld" ++
   label ".Sprint_newline" ++ string "\n" ++
   label ".Sprint_space" ++ string " " ++
   label ".Sprint_lbra" ++ string "{" ++
@@ -236,7 +236,21 @@ and compile_binop e1 e2 = function
 (* Compilation d'un appel à print *)
 let rec compile_print = function
   | [] ->
-    call "print_newline"
+    nop
+  | [Tstring, _ as e] ->
+    compile_expr e ++
+    call "print_string"
+  | [t, _ as e] ->
+    compile_expr e ++
+    call (print_type t)
+  | (Tstring, _ as e)::q ->
+    compile_expr e ++
+    call "print_string" ++
+    compile_print q
+  | (t, _ as e)::((Tstring, _)::_ as q) ->
+    compile_expr e ++
+    call (print_type t) ++
+    compile_print q
   | (t, _ as e)::q ->
     compile_expr e ++
     call (print_type t) ++
@@ -248,7 +262,7 @@ let rec compile_instr = function
   | Tiempty ->
     nop
   | Tibloc l ->
-    let b_code = List.map compile_instr l in
+    let b_code = List.rev (List.map compile_instr l) in
     List.fold_right (++) b_code nop
   | Tiif (e, i1, i2) ->
     let lab_false = new_lab () and lab_true = new_lab () in
