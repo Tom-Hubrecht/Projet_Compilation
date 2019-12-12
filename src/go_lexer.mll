@@ -27,7 +27,7 @@ let decimal s =
 (* Only store the content of the string without the double quotes *)
 let trim s =
   let n = String.length s in
-  String.sub s 1 (n - 2)
+  Scanf.unescaped (String.sub s 1 (n - 2))
 }
 
 let digit = ['0'-'9']
@@ -35,8 +35,8 @@ let alpha = ['a'-'z' 'A'-'Z' '_']
 let ident = alpha (alpha | digit)*
 let hexa = ['0'-'9' 'a'-'f' 'A'-'F']
 let integer = digit* | (("0x" | "0X") hexa+)
-let e_c = "\\" "\""
-let car = [' ' '!' '#'-'[' ']'-'~' '\\' '\n' '\t' ] | e_c
+let e_c = "\\\"" | "\\n" | "\\\\" | "\\t"
+let car = [' ' '!' '#'-'[' ']'-'~'] | e_c
 let str = '"' car* '"'
 
 (* General lexer *)
