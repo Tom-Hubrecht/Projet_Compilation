@@ -158,6 +158,7 @@ let token lexbuf =
                   begin
                     prec := MINUS;
                     next := [!t'];
+                    neg := false;
                     MINUS
                   end
               end
