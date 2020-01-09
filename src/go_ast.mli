@@ -47,8 +47,8 @@ type r_expr =
   | Tecst of constant
   | Tevar of raw_ident * int
   | Teattr of t_expr * raw_ident
-  | Tecall of raw_ident * r_expr list
-  | Tecomp of raw_ident * r_expr
+  | Tecall of raw_ident * t_expr list
+  | Tecomp of raw_ident * t_expr
   | Tenew of raw_v_type
   | Teunop of unop * t_expr
   | Tebinop of binop * t_expr * t_expr
@@ -59,8 +59,6 @@ type r_instr =
   | Ibloc of instr list
   | Iif of expr * instr * instr
   | Iexpr of expr
-  | Iincr of expr
-  | Idecr of expr
   | Ifor of expr * instr
   | Iassoc of expr list * expr list
   | Ivar of ident list * v_type option * expr list
@@ -73,19 +71,18 @@ type t_instr =
   | Tiif of t_expr * t_instr * t_instr
   | Tiprint of t_expr list
   | Tiexpr of t_expr
-  | Tiexec of r_expr
-  | Tiincr of t_expr
-  | Tidecr of t_expr
+  | Tiexec of raw_v_type * raw_ident * t_expr list
   | Tifor of t_expr * t_instr
   | Tiassoc of t_expr list * t_expr list
-  | Tivar of ident list * v_type option * t_expr list
+  | Tivar of raw_ident list * raw_v_type option * t_expr list
   | Tireturn of t_expr list
 
 type var = ident list * v_type
+type raw_var = raw_ident list * raw_v_type
 
 type fonction = ident * var list * r_type * instr
 
-type t_fonc = ident * var list * r_type * t_instr
+type t_fonc = raw_ident * var list * r_type * t_instr * int
 
 type structure = ident * var list
 
@@ -93,11 +90,5 @@ type decl =
   | Dstruct of structure
   | Dfunc of fonction
 
-type t_decl =
-  | Tdstruct of structure
-  | Tdfunc of t_fonc
-
 type file = bool * decl list
-
-type t_file = bool * t_decl list
 

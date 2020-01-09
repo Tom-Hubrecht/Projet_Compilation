@@ -268,9 +268,13 @@ instr_s:
 | e = expr
     {$startpos, $endpos, Iexpr e}
 | e = expr "++"
-    {$startpos, $endpos, Iincr e}
+    {$startpos, $endpos,
+     Iassoc([e], [$startpos, $endpos, Ebinop(
+         Badd, e, (d_pos, d_pos, Ecst (Cint 1L)))])}
 | e = expr "--"
-    {$startpos, $endpos, Idecr e}
+    {$startpos, $endpos,
+     Iassoc([e], [$startpos, $endpos, Ebinop(
+         Bsub, e, (d_pos, d_pos, Ecst (Cint 1L)))])}
 | l = separated_nonempty_list(",", expr) "="
   r = separated_nonempty_list(",", expr)
     {$startpos, $endpos, Iassoc(l, r)}

@@ -76,8 +76,6 @@ let rec p_instr fmt (_, _, i) = match i with
   | Iif(e, i1, i2) ->
     fprintf fmt "@[<v 2>if %a then@,%a@,else@,%a@]" p_expr e p_instr i1 p_instr i2
   | Iexpr e -> fprintf fmt "%a;@," p_expr e
-  | Iincr e -> fprintf fmt "@[<h 2>%a++@]" p_expr e
-  | Idecr e -> fprintf fmt "@[<h 2>%a--@]" p_expr e
   | Ifor(e, i) -> fprintf fmt "@[<v 2>for %a@,{@,%a@,}@]" p_expr e p_instr i
   | Iassoc(l1, l2) ->
     fprintf fmt "@,@[%a = %a@];" (p_list ", " p_expr) l1 (p_list ", " p_expr) l2

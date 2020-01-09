@@ -47,10 +47,10 @@ let () =
     close_in c;
     if !print_tree then print_file f;
     if !parse_only then exit 0;
-    let p = Go_typer.check_file f in
+    let fmt, l', s_env, v_env, f_env = Go_typer.check_file f in
     if !type_only then exit 0;
     let out = Filename.chop_suffix file ".go" ^ ".s" in
-    Go_assembler.compile_program p out;
+    Go_assembler.compile_program (fmt, l', s_env, v_env, f_env) out;
     exit 0;
   with
     | Go_lexer.Lexing_error s ->
