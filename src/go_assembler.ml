@@ -8,7 +8,7 @@ open Go_ast
 module Smap = Map.Make(String)
 
 type l_env = {
-  env : int Smap.t;
+  env : (int * bool) Smap.t;
   next : int;
 }
 
@@ -52,7 +52,9 @@ let rec size = function
   | Tall -> print_string "Tall"; assert false
   | Tnil -> print_string "Tnil"; assert false
 
-(* Crée l'environnement pour les variables locales *)
+let size_8 t = 8 * (size t)
+
+(* Crée l'environnement pour les variables locales à l'aide des paramètres *)
 let rec create_env v =
   let _, env =
     List.fold_right
@@ -60,19 +62,24 @@ let rec create_env v =
          let s = 8 * size t in
          List.fold_right
            (fun (x:string) (n, e) ->
-              n + s, Smap.add x (n + s) e) l (next, env))
+              n + s, Smap.add x ((n + s), true) e) l (next, env))
       v (8, Smap.empty) in
   {env=env; next=0}
 
 (* Ajoute une variable locale à l'environnement *)
 let add_loc l_env x t =
   let n = l_env.next + 8 in
-  let env' = Smap.add x (-n) l_env.env in
+  let env' = Smap.add x (-n, false) l_env.env in
   {env=env'; next=n}
 
 (* On crée un élément nul *)
 let init t pos =
-  let s = size t in
+  movq (imm (size t)) !%rsi ++
+  movq (imm 8) !%rdi ++
+  movq (imm 0) !%rax ++
+  call "calloc" ++
+  movq !%rax (ind ~ofs:(-pos) rbp)
+(*
   let rec raz = function
     | 0 -> movq (imm 0) (ind ~ofs:(-pos) rbp)
     | i ->
@@ -80,7 +87,7 @@ let init t pos =
       movq (imm 0) (ind ~ofs:(-p) rbp) ++ (raz (i-1))
   in
   raz (s-1)
-
+*)
 (* Fonctions d'affichage *)
 let rec call_print = function
   | Tint ->
@@ -167,19 +174,20 @@ let compile_cst = function
   | Cstring s -> leaq (new_str s) rdi
 
 (* La valeur calculéee se trouve dans le registre %rdi *)
-let rec compile_expr l_env = function
+let rec compile_expr ?(keep_ptr=false) l_env = function
   | _, Tecst c ->
     compile_cst c
   | t, Tevar (x, _) ->
-    let pos = Smap.find x l_env.env in
-    if size t = 1 then
+    let pos, t_val = Smap.find x l_env.env in
+    movq (ind ~ofs:pos rbp) !%rdi ++
+    (if size t = 1 && not keep_ptr && not t_val then
       (* On met directement la valeur dans %rdi *)
-      movq (ind ~ofs:pos rbp) !%rdi
+      movq (ind rdi) !%rdi
     else
-      (* On met l'adresse dans %rax *)
-      assert false
+      (* On garde l'adresse dans %rdi *)
+      nop)
   | _, Teunop (u, e) ->
-    compile_unop l_env e u
+    compile_unop keep_ptr l_env e u
   | _, Tebinop (b, e1, e2) ->
     compile_binop l_env e1 e2 b
   | t, Tecall (f, l) ->
@@ -204,7 +212,7 @@ let rec compile_expr l_env = function
   | _ -> assert false
 
 (* Instructions unaires *)
-and compile_unop l_env e = function
+and compile_unop keep_ptr l_env (t, _ as e) = function
   | Unot ->
     compile_expr l_env e ++
     cmpq !%rdi (imm 0) ++
@@ -212,8 +220,16 @@ and compile_unop l_env e = function
   | Uneg ->
     compile_expr l_env e ++
     negq !%rdi
-  | Uref
-  | Uderef -> (* TODO *) assert false
+  | Uref ->
+    begin
+      match t with
+        | Pointer t' ->
+          compile_expr l_env e ++
+          (if size t' = 1 && not keep_ptr then movq (ind rdi) !%rdi else nop)
+        | _ -> assert false
+    end
+  | Uderef ->
+    compile_expr ~keep_ptr:true l_env e
 
 (* Instructions pour les opérations binaires avec e1 dans %rdi et e2 dans %rsi
  * et place le résultat dans %rdi *)

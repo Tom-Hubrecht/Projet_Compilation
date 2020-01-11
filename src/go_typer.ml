@@ -391,8 +391,8 @@ and type_instr f_env s_env env ret v fmt lev = function
     if List.length r <> List.length l1 then
       raise (Length_ident_error (List.length r, l1, sp, ep));
     List.iter2 (fun x t -> add_var x t env lev) l1 r;
-    false, false, Tivar (strip_loc l1, None, [Tlist r, e']),
-    size s_env (Tlist r)
+    false, false, Tivar (strip_loc l1, None, [Tlist r, e']), List.length r
+    (*size s_env (Tlist r)*)
   (* Déclaration de variables avec des expressions *)
   | sp, ep, Ivar(l1, None, l2) as i ->
     if List.length l1 <> List.length l2 then
@@ -406,7 +406,7 @@ and type_instr f_env s_env env ret v fmt lev = function
                     raise (Decl_error ((sp', ep', str_of_expr e),
                                        "use of untyped nil."));
                   add_var x t env lev;
-                  e'::l, s + size s_env t) ([], 0) l1 l2 in
+                  e'::l, s + 1 (*size s_env t*)) ([], 0) l1 l2 in
     false, false, Tivar (strip_loc l1, None, List.rev l'), s'
   (* Déclaration de variables typées avec un appel de fonction *)
   | sp, ep, Ivar(l1, Some t, [_, _, Ecall (f, l)]) ->
@@ -420,14 +420,14 @@ and type_instr f_env s_env env ret v fmt lev = function
            raise (Decl_error (f, "this function is expected to return only "^
                                  "values of type "^(str_of_type t')));
         add_var x t env lev) l1 r;
-    false, false, Tivar (strip_loc l1, None, [Tlist r, e']),
-    size s_env (Tlist r)
+    false, false, Tivar (strip_loc l1, None, [Tlist r, e']), List.length r
+    (*size s_env (Tlist r)*)
   (* Déclaration de variables typées *)
   | _, _, Ivar(l1, Some t, []) ->
     let t' = check_type v t in
     List.iter (fun x -> add_var x t' env lev) l1;
-    false, false, Tivar(strip_loc l1, Some t', []),
-    (size s_env t') * (List.length l1)
+    false, false, Tivar(strip_loc l1, Some t', []), List.length l1
+    (*(size s_env t') * (List.length l1)*)
   (* Déclaration de variables typées avec des expressions *)
   | sp, ep, Ivar(l1, Some t, l2) as i ->
     let t = check_type v t in
@@ -442,8 +442,8 @@ and type_instr f_env s_env env ret v fmt lev = function
                     raise (Typing_error (e, [t'], [t]));
                   add_var x t env lev;
                   e'::l) [] l1 l2 in
-    false, false, Tivar(strip_loc l1, None, List.rev l'),
-    (size s_env t) * (List.length l1)
+    false, false, Tivar(strip_loc l1, None, List.rev l'), List.length l1
+    (*(size s_env t') * (List.length l1)*)
   (* Renvoi des valeurs d'une fonction *)
   | _, _, Ireturn [_, _, Ecall (f, l) as e] ->
     let r, e' = type_call f_env s_env env lev (f, l) in
