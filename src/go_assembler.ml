@@ -219,30 +219,85 @@ let compile_cst = function
 let rec compile_expr ?(k_p=false) l_env = function
   | _, Tecst c ->
     compile_cst c
-  | t, Tevar (x, _) ->
-    let pos, t_val = Smap.find x l_env.env in
-    movq (ind ~ofs:pos rbp) !%rdi ++
-    (if size t = 1 && not k_p && not t_val then
-      (* On met directement la valeur dans %rdi *)
-      movq (ind rdi) !%rdi
+  | t, Tevar (x, _, pos) ->
+    let p, t_val = Smap.find x l_env.env in
+    let pos = (if t_val then p else pos) in
+    if k_p && t_val then
+      leaq (ind ~ofs:pos rbp) rdi
     else
-      (* On garde l'adresse dans %rdi *)
-      nop)
+      begin
+        movq (ind ~ofs:pos rbp) !%rdi ++
+        (if size t = 1 && not k_p && not t_val then
+           (* On met directement la valeur dans %rdi *)
+           movq (ind rdi) !%rdi
+         else
+           (* On garde l'adresse dans %rdi *)
+           nop)
+      end
   | _, Teunop (u, e) ->
     compile_unop k_p l_env e u
   | _, Tebinop (b, e1, e2) ->
     compile_binop l_env e1 e2 b
   | t, Tecall (f, l) ->
     let s, c = compile_call l_env t f l in
-    c ++
-    (if size t = 1 then movq !%rax !%rdi else nop) ++
-    pop s
+    c ++ pop s ++
+    movq !%rax !%rdi
+  | t, Tecomp (f, e) ->
+    let s, c = compile_comp l_env t f e in
+    c ++ pop s ++
+    movq !%rax !%rdi
   | _, Tenew t ->
     movq (imm (size t)) !%rsi ++
     movq (imm 8) !%rdi ++
     movq (imm 0) !%rax ++
     call "calloc" ++
     movq !%rax !%rdi
+  | _, Teattr ((Pointer t, Tevar (x, _, pos)), f) ->
+    let p, t_val = Smap.find x l_env.env in
+    let t', ofs = get_field f t in
+    if t_val then
+      begin
+        if size t' = 1 && not k_p then
+          movq (ind ~ofs:p rbp) !%rdi ++
+          movq (ind ~ofs:ofs rdi) !%rdi
+        else
+          movq (ind ~ofs:p rbp) !%rdi ++
+          addq (imm ofs) !%rdi
+      end
+    else
+      movq (ind ~ofs:pos rbp) !%rdi ++
+      movq (ind rdi) !%rdi ++
+      addq (imm ofs) !%rdi ++
+      (if size t' = 1 && not k_p then
+         movq (ind rdi) !%rdi
+       else
+         nop)
+  | _, Teattr ((Pointer t, _ as e), f) ->
+    let t', ofs = get_field f t in
+    let c = compile_expr l_env e in
+    c ++
+    addq (imm ofs) !%rdi ++
+    (if size t' = 1 && not k_p then
+       movq (ind rdi) !%rdi
+     else
+       nop)
+  | _, Teattr ((t, Tevar (x, _, pos)), f) ->
+    let p, t_val = Smap.find x l_env.env in
+    let t', ofs = get_field f t in
+    if t_val then
+      begin
+        if size t' = 1 && not k_p then
+          movq (ind ~ofs:(p + ofs) rbp) !%rdi
+        else
+          leaq (ind ~ofs:(p + ofs) rbp) rdi
+      end
+    else
+      movq (ind ~ofs:pos rbp) !%rdi ++
+      addq (imm ofs) !%rdi ++
+      (if size t' = 1 && not k_p then
+         movq (ind rdi) !%rdi
+       else
+         nop)
   | _, Teattr ((t', _ as e), f) ->
     let c = compile_expr ~k_p:k_p l_env e in
     let (t, ofs) = get_field f t' in
@@ -252,24 +307,57 @@ let rec compile_expr ?(k_p=false) l_env = function
        movq (ind rdi) !%rdi
      else
        nop)
-  | _ -> assert false
 
 (* Compilation des appels de fonction *)
 and compile_call l_env t f l =
-    let s, c =
-      List.fold_left
-        (fun (s, c) (t, _ as e) ->
-           let c_e = compile_expr l_env e in
-           if size t = 1 then
-             s + 1, c ++ c_e ++ pushq !%rdi
-           else
-             size t, c ++ c_e) (0, nop) l in
-    s,
-    c ++
-    call ("func_"^f)
+  let s, c =
+    List.fold_left
+      (fun (s, c) (t, _ as e) ->
+         let c_e = compile_expr l_env e in
+         if size t = 1 then
+           s + 1, c ++ c_e ++ pushq !%rdi
+         else
+           s + size t,
+           c ++ c_e ++
+           push (size t) ++
+           movq !%rdi !%rsi ++
+           movq !%rsp !%rdi ++
+           movq (imm (size_8 t)) !%rdx ++
+           call "memmove")
+      (0, nop) l in
+  s,
+  c ++
+  call ("func_"^f)
 
-and compile_comp = function
-  | _ -> assert false
+and compile_comp l_env t1 f (t, _ as e) =
+  let c_e = compile_expr l_env e in
+  let s = size t in
+  s,
+  c_e ++
+  push s ++
+  movq !%rdi !%rsi ++
+  movq !%rsp !%rdi ++
+  movq (imm (size_8 t)) !%rdx ++
+  call "memmove" ++
+  call ("func_"^f)
+  (*let s, c =
+    List.fold_left
+      (fun (s, c) (t, _ as e) ->
+         let c_e = compile_expr l_env e in
+         if size t = 1 then
+           s + 1, c ++ c_e ++ pushq !%rdi
+         else
+           s + size t,
+           c ++ c_e ++
+           push (size t) ++
+           movq !%rdi !%rsi ++
+           movq !%rsp !%rdi ++
+           movq (imm (size_8 t)) !%rdx ++
+           call "memmove")
+      (0, nop) l in
+  s,
+  c ++
+  call ("func_"^f)*)
 
 and compile_diff l_env eq (t, _ as e1) e2 =
   if size t = 1 then
@@ -281,7 +369,16 @@ and compile_diff l_env eq (t, _ as e1) e2 =
     (if eq then sete else setne) !%dil ++
     andq (imm 1) !%rdi
   else
-    nop
+    compile_expr l_env e1 ++
+    pushq !%rdi ++
+    compile_expr l_env e2 ++
+    popq rsi ++
+    movq (imm (size_8 t)) !%rdx ++
+    call "memcmp" ++
+    testq !%rax !%rax ++
+    (if eq then sete else setne) !%dil ++
+    andq (imm 1) !%rdi
+
 
 (* Instructions unaires *)
 and compile_unop keep_ptr l_env (t, _ as e) = function
@@ -309,31 +406,36 @@ and compile_unop keep_ptr l_env (t, _ as e) = function
 and compile_binop l_env e1 e2 = function
   | Badd ->
     compile_expr l_env e2 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e1 ++
+    popq rsi ++
     addq !%rsi !%rdi
   | Bsub ->
     compile_expr l_env e2 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e1 ++
+    popq rsi ++
     subq !%rsi !%rdi
   | Bmul ->
     compile_expr l_env e2 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e1 ++
+    popq rsi ++
     imulq !%rsi !%rdi
   | Bdiv ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rax ++
-    cqto ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rax ++
+    cqto ++
     idivq !%rdi ++
     movq !%rax !%rdi
   | Bmod ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rax ++
-    cqto ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rax ++
+    cqto ++
     idivq !%rdi ++
     movq !%rdx !%rdi
   | Band ->
@@ -354,29 +456,33 @@ and compile_binop l_env e1 e2 = function
     label lab
   | Blt ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rsi ++
     cmpq !%rdi !%rsi ++
     setl !%dil ++
     andq (imm 1) !%rdi
   | Ble ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rsi ++
     cmpq !%rdi !%rsi ++
     setle !%dil ++
     andq (imm 1) !%rdi
   | Bgt ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rsi ++
     cmpq !%rdi !%rsi ++
     setg !%dil ++
     andq (imm 1) !%rdi
   | Bge ->
     compile_expr l_env e1 ++
-    movq !%rdi !%rsi ++
+    pushq !%rdi ++
     compile_expr l_env e2 ++
+    popq rsi ++
     cmpq !%rdi !%rsi ++
     setge !%dil ++
     andq (imm 1) !%rdi
@@ -409,17 +515,17 @@ let rec compile_print l_env = function
     compile_print l_env q
 
 (* On compile les instructions *)
-let rec compile_instr l_env = function
+let rec compile_instr l_env ret_lab = function
   | Tiempty ->
     l_env, nop
   | Tibloc l ->
     List.fold_left
-      (fun (e, c) i -> let e', c_i = compile_instr e i in e', c ++ c_i)
+      (fun (e, c) i -> let e', c_i = compile_instr e ret_lab i in e', c ++ c_i)
       (l_env, nop) (List.rev l)
   | Tiif (e, i1, i2) ->
     let lab_false = new_lab () and lab_true = new_lab () in
-    let _, c1 = compile_instr l_env i1 in
-    let _, c2 = compile_instr l_env i2 in
+    let _, c1 = compile_instr l_env ret_lab i1 in
+    let _, c2 = compile_instr l_env ret_lab i2 in
     l_env,
     compile_expr l_env e ++
     testq !%rdi !%rdi ++
@@ -429,6 +535,7 @@ let rec compile_instr l_env = function
     label lab_false ++
     c2 ++
     label lab_true
+  | Tiprint [Tlist r, Tecall (f, l)] -> l_env, nop
   | Tiprint l ->
     l_env,
     compile_print l_env l
@@ -436,13 +543,12 @@ let rec compile_instr l_env = function
     l_env,
     compile_expr l_env e
   | Tiexec (t, f, l) ->
-    let c = compile_expr l_env (t, Tecall (f, l)) in
+    let s, c_f = compile_call l_env t f l in
     l_env,
-    c ++
-    (if size t = 1 then nop else pop (size t))
+    c_f ++ pop s
   | Tifor (e, i) ->
     let lab_end = new_lab () and lab_start = new_lab () in
-    let _, c = compile_instr l_env i in
+    let _, c = compile_instr l_env ret_lab i in
     l_env,
     label lab_start ++
     compile_expr l_env e ++
@@ -451,6 +557,34 @@ let rec compile_instr l_env = function
     c ++
     jmp lab_start ++
     label lab_end
+  | Tiassoc (l1, [Tlist r, Tecomp (f, l)]) ->
+    let s, c_f = compile_comp l_env (Tlist r) f l in
+    l_env,
+    List.fold_right
+      (fun (t, _ as e) c ->
+         c ++
+         compile_expr ~k_p:true l_env e ++
+         popq rsi ++
+         (if size t = 1 then
+            movq !%rsi (ind rdi)
+          else
+            movq (imm (size_8 t)) !%rdx ++
+            call "memmove"))
+      l1 (c_f ++ pop s ++ pushq !%rax)
+  | Tiassoc (l1, [Tlist r, Tecall (f, l)]) ->
+    let s, c_f = compile_call l_env (Tlist r) f l in
+    l_env,
+    List.fold_right
+      (fun (t, _ as e) c ->
+         c ++
+         compile_expr ~k_p:true l_env e ++
+         popq rsi ++
+         (if size t = 1 then
+            movq !%rsi (ind rdi)
+          else
+            movq (imm (size_8 t)) !%rdx ++
+            call "memmove"))
+      l1 (c_f ++ pop s ++ pushq !%rax)
   | Tiassoc (l1, l2) ->
     let c_d =
       List.fold_left
@@ -475,6 +609,44 @@ let rec compile_instr l_env = function
          let e' = add_loc e x t in
          e' , c ++ init t e'.next)
       (l_env, nop) l
+  | Tivar ([x], None, [t, _ as e]) ->
+    let l_env' = add_loc l_env x t in
+    let pos = l_env'.next in
+    l_env',
+    compile_expr l_env e ++
+    pushq !%rdi ++
+    init t pos ++
+    popq rsi ++
+    (if size t = 1 then
+       movq !%rsi (ind rax)
+     else
+       movq !%rax !%rdi ++
+       movq (imm (size_8 t)) !%rdx ++
+       call "memmove")
+  | Tivar (l1, None, [Tlist r, Tecomp (f, l)]) ->
+    let s, c_f = compile_comp l_env (Tlist r) f l in
+    let n_env, c =
+      List.fold_right2
+        (fun x t (e, c) ->
+           let e' = add_loc e x t in
+           e',
+           c ++
+           init t e'.next ++
+           popq rsi ++
+           (if size t = 1 then
+              leaq (ind ~ofs:8 rsi) rbx ++
+              pushq !%rbx ++
+              movq (ind rsi) !%rsi ++
+              movq !%rsi (ind rax)
+            else
+              leaq (ind ~ofs:(size_8 t) rsi) rbx ++
+              pushq !%rbx ++
+              movq !%rax !%rdi ++
+              movq (imm (size_8 t)) !%rdx ++
+              call "memmove"))
+        l1 r (l_env, c_f ++ pop s ++ pushq !%rax) in
+    n_env,
+    c ++ pop 1
   | Tivar (l1, None, [Tlist r, Tecall (f, l)]) ->
     let s, c_f = compile_call l_env (Tlist r) f l in
     let n_env, c =
@@ -486,20 +658,24 @@ let rec compile_instr l_env = function
            init t e'.next ++
            popq rsi ++
            (if size t = 1 then
+              leaq (ind ~ofs:8 rsi) rbx ++
+              pushq !%rbx ++
+              movq (ind rsi) !%rsi ++
               movq !%rsi (ind rax)
             else
+              leaq (ind ~ofs:(size_8 t) rsi) rbx ++
+              pushq !%rbx ++
               movq !%rax !%rdi ++
               movq (imm (size_8 t)) !%rdx ++
               call "memmove"))
-        l1 r (l_env, c_f) in
+        l1 r (l_env, c_f ++ pop s ++ pushq !%rax) in
     n_env,
-    c ++
-    pop s
+    c ++ pop 1
   | Tivar (l1, None, l2) ->
     let c_d, l_t =
       List.fold_left
         (fun (c, l) (t, _ as e) ->
-           c ++ (compile_expr l_env e) ++ pushq !%rdi, t::l)
+           (compile_expr l_env e) ++ pushq !%rdi ++ c, t::l)
         (nop, []) l2 in
     List.fold_right2
       (fun x t (e, c) ->
@@ -516,38 +692,50 @@ let rec compile_instr l_env = function
             call "memmove"))
       l1 (List.rev l_t) (l_env, c_d)
   | Tivar (l, _, _) -> assert false
+  | Tireturn [] -> l_env, jmp ret_lab
   | Tireturn [t, _ as e] when size t = 1 ->
     l_env,
     compile_expr l_env e ++
-    movq !%rdi !%rax
+    movq !%rdi !%rax ++
+    jmp ret_lab
   | Tireturn l ->
     let c_r, s_r =
       List.fold_left
         (fun (c, s) (t, _ as e) ->
-           c ++
-           pushq !%rax ++
-           compile_expr l_env e ++
-           popq rax ++
-           movq !%rdi (ind ~ofs:s rax),
-           s + 8)
+           let c_e = c ++
+                     pushq !%rax ++
+                     compile_expr l_env e ++
+                     popq rax in
+           (if size t = 1 then
+              c_e ++ movq !%rdi (ind ~ofs:s rax), s + 8
+            else
+              c_e ++
+              pushq !%rax ++
+              movq !%rdi !%rsi ++
+              leaq (ind ~ofs:s rax) rdi ++
+              movq (imm (size_8 t)) !%rdx ++
+              call "memmove",
+              s + size_8 t))
         (nop, 0) l in
     l_env,
     movq (imm s_r) !%rdi ++
     movq (imm 0) !%rax ++
     call "malloc" ++
     c_r ++
-    ret
+    jmp ret_lab
 
 (* On ne compile pas les structures, uniquement les fonctions *)
 let compile_decl (f, v, t, b, s) =
   let l_env = create_env v in
-  let _, c = compile_instr l_env b in
+  let lab_ret = "ret_"^f in
+  let _, c = compile_instr l_env lab_ret b in
   let s' = if s = 0 then 0 else s + 2 - (s mod 2) in
   label ("func_"^f) ++
   pushq !%rbp ++
   movq !%rsp !%rbp ++
   push s' ++
   c ++
+  label lab_ret ++
   pop s' ++
   popq rbp ++
   ret

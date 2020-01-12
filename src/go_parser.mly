@@ -7,6 +7,8 @@ open Go_ast
 exception Parsing_error of string
 exception Syntax_error of Lexing.position * Lexing.position * string
 
+let d_pos = Lexing.dummy_pos
+
 let rec get_id = function
   | [] -> []
   | (s, e, Evar id)::q -> (s, e, id)::(get_id q)
@@ -19,9 +21,18 @@ let rec filter = function
   | (_, _, Iempty)::q -> filter q
   | x::q -> x::(filter q)
 
-let content_of_loc (_, _, r_e) = r_e
+let rec flatten_var l =
+  let rec aux acc = function
+    | [] -> acc
+    | (_, _, v' as v)::q ->
+      let q1, q2 = (aux acc q) in
+      v::q1, (d_pos, d_pos, Evar v')::q2
+  in
+  match l with
+    | [] -> [], []
+    | (l, _)::q -> aux (flatten_var q) l
 
-let d_pos = Lexing.dummy_pos
+let content_of_loc (_, _, r_e) = r_e
 
 %}
 
@@ -122,9 +133,13 @@ fonc:
 | FUNC id = loc_ident "(" ")" b = bloc ";"
     {id, [], [], b}
 | FUNC id = loc_ident "(" v = sep_list(",", vars) ")" t = r_type b = bloc ";"
-    {id, v, t, b}
+    {let v_l, v_x = flatten_var v in
+     let b' = d_pos, d_pos, Ibloc [d_pos, d_pos, Ivar (v_l, None, v_x); b] in
+     id, v, t, b'}
 | FUNC id = loc_ident "(" v = sep_list(",", vars) ")" b = bloc ";"
-    {id, v, [], b}
+    {let v_l, v_x = flatten_var v in
+     let b' = d_pos, d_pos, Ibloc [d_pos, d_pos, Ivar (v_l, None, v_x); b] in
+     id, v, [], b'}
 ;
 
 vars:

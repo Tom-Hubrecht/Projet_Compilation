@@ -27,6 +27,8 @@ let a_decl = " is already declared."
 
 let d_pos = Lexing.dummy_pos
 
+let rbp_ofs = ref 0
+
 (* Checks if a structure has a recursive definition *)
 let check_recur s_env p_env =
   let rec aux s vis =
@@ -76,8 +78,8 @@ let get_sizes s_env =
                  (Smap.add x (t, i) f, i + 8 * (aux s'))
                | _ -> assert false)
           (Smap.empty, 0) (flatten_var l_var) in
-      n_env := Smap.add s (size, f') !n_env;
-      size
+      n_env := Smap.add s (size / 8, f') !n_env;
+      size / 8
   in
   Smap.iter (fun s _ -> let _ = aux s in ()) s_env;
   !n_env
@@ -177,7 +179,7 @@ let type_cst = function
 (* Create the environment from the args *)
 let create_env args =
   let env = Hashtbl.create 0 in
-  Smap.iter (fun x t -> Hashtbl.add env (x, 0) (t, true, (d_pos, d_pos))) args;
+  Smap.iter (fun x t -> Hashtbl.add env (x, 0) (t, true, (d_pos, d_pos), 0)) args;
   env
 
 (* Add a variable with a level lev to the environment *)
@@ -186,7 +188,8 @@ let add_var (sp, ep, x' as x) t env lev =
     begin
       if Hashtbl.mem env (x', lev) then
         raise (Decl_error (x, "this variable is already declared."));
-      Hashtbl.add env (x', lev) (t, false, (sp, ep))
+      rbp_ofs := !rbp_ofs - 8;
+      Hashtbl.add env (x', lev) (t, false, (sp, ep), !rbp_ofs)
     end
 
 (* Marks the var x as used in regards to the level *)
@@ -195,19 +198,19 @@ let rec use_var (_, _, x' as x) env = function
   | l ->
     if Hashtbl.mem env (x', l) then
       begin
-        let t, _, p = Hashtbl.find env (x', l) in
-        Hashtbl.replace env (x', l) (t, true, p);
-        t, l
+        let t, _, p, pos = Hashtbl.find env (x', l) in
+        Hashtbl.replace env (x', l) (t, true, p, pos);
+        t, l, pos
       end
     else
       use_var x env (l - 1)
 
 (* Type a left expression and raise an error if the expr is not a left value *)
 let rec type_left_expr f_env s_env env lev = function
-  | _, _, Evar "_" -> Tall, Tevar ("_", 0)
+  | _, _, Evar "_" -> Tall, Tevar ("_", 0, 0)
   | sp, ep, Evar x ->
-    let t, l = use_var (sp, ep, x) env lev in
-    t, Tevar (x, l)
+    let t, l, p = use_var (sp, ep, x) env lev in
+    t, Tevar (x, l, p)
   | _, _, Eattr(e, _) as e1 ->
     let _ = type_left_expr f_env s_env env lev e in
     type_expr f_env s_env env lev e1
@@ -220,8 +223,8 @@ and type_expr f_env s_env env lev = function
   | sp, ep, Evar "_" ->
     raise (Decl_error ((sp, ep, "_"), "cannot use _ as a value"))
   | sp, ep, Evar x ->
-    let t, l = use_var (sp, ep, x) env lev in
-    t, Tevar (x, l)
+    let t, l, p = use_var (sp, ep, x) env lev in
+    t, Tevar (x, l, p)
   | _, _, Eattr(e, (_, _, i' as i)) ->
     begin
       let (t, _) as e' = type_expr f_env s_env env lev e in
@@ -316,7 +319,7 @@ and type_instr f_env s_env env ret v fmt lev = function
                   i'::l') [] l in
     (* On retire les variables des sous-blocs *)
     Hashtbl.iter
-      (fun (x, l) (t, b, (sp, ep)) ->
+      (fun (x, l) (t, b, (sp, ep), _) ->
          if l > lev then
            if b then
              Hashtbl.remove env (x, l)
@@ -552,6 +555,7 @@ let check_file (fmt, l) =
   let fmt' = ref false in
   let check_func l = function
     | Dfunc((_, _, f') as f, v, t, b) ->
+      rbp_ofs := 0;
       let r, t_a, env = Smap.find f' f_env in
       let env' = create_env env in
       let re, fu, b', s = type_instr f_env s_env env' r v_types fmt 0 b in
