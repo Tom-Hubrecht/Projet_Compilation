@@ -17,7 +17,7 @@ let str_count = ref 0
 
 let str_list = ref []
 
-let s_env:((int * (Go_ast.raw_v_type * int) Smap.t) Smap.t ref) = ref Smap.empty
+let s_env = ref Smap.empty
 
 (* On redéfinit push et pop *)
 let pop n = addq (imm (8*n)) !%rsp
@@ -46,20 +46,37 @@ let print_type = function
 
 (* Renvoie la taille d'un type *)
 let rec size = function
-  | Tint | Tbool | Tstring | Pointer _ -> 1
+  | Tint | Tbool | Tstring | Pointer _ | Tnil -> 1
   | Tstruct s -> fst (Smap.find s !s_env)
   | Tlist l -> List.fold_left (fun s t -> s + size t) 0 l
   | Tall -> print_string "Tall"; assert false
-  | Tnil -> print_string "Tnil"; assert false
 
 let size_8 t = 8 * (size t)
+
+(* Renvoie la liste ordonnée des champs *)
+let get_ordered_fields s =
+  let rec ins (_, o as f) = function
+    | [] -> [f]
+    | (_, o' as f')::q ->
+      if o < o' then
+        f::f'::q
+      else
+        f'::(ins f q)
+  in
+  Smap.fold (fun _ f l -> ins f l) (snd (Smap.find s !s_env)) []
+
+(* Renvoie le type et le décalage d'un champ du type t *)
+let get_field f = function
+  | Pointer (Tstruct s) | Tstruct s ->
+    Smap.find f (snd (Smap.find s !s_env))
+  | _ -> assert false
 
 (* Crée l'environnement pour les variables locales à l'aide des paramètres *)
 let rec create_env v =
   let _, env =
     List.fold_right
       (fun (l, t) (next, env) ->
-         let s = 8 * size t in
+         let s = size_8 t in
          List.fold_right
            (fun (x:string) (n, e) ->
               n + s, Smap.add x ((n + s), true) e) l (next, env))
@@ -79,17 +96,9 @@ let init t pos =
   movq (imm 0) !%rax ++
   call "calloc" ++
   movq !%rax (ind ~ofs:(-pos) rbp)
-(*
-  let rec raz = function
-    | 0 -> movq (imm 0) (ind ~ofs:(-pos) rbp)
-    | i ->
-      let p = pos + 8*i in
-      movq (imm 0) (ind ~ofs:(-p) rbp) ++ (raz (i-1))
-  in
-  raz (s-1)
-*)
+
 (* Fonctions d'affichage *)
-let rec call_print = function
+let rec call_print ?(follow_ptr=true) = function
   | Tint ->
     movq !%rdi !%rsi ++
     leaq (lab ".Sprint_int") rdi ++
@@ -112,15 +121,60 @@ let rec call_print = function
     leaq (lab ".Sprint_nil") rdi ++
     movq (imm 0) !%rax ++
     call "printf"
-  | Tstruct s -> nop (* TODO *)
-  | Pointer (Tstruct s) ->
-    let print_s = call_print (Tstruct s) in
-    movq !%rdi !%rsi ++
+  | Tstruct s when size (Tstruct s) = 0 ->
+    leaq (lab ".Sprint_lbra") rdi ++
+    movq (imm 0) !%rax ++
+    call "printf" ++
+    leaq (lab ".Sprint_rbra") rdi ++
+    movq (imm 0) !%rax ++
+    call "printf"
+  | Tstruct s ->
+    let fields = get_ordered_fields s in
+    let rec p_struct = function
+      | [] -> nop
+      | [t, ofs] ->
+        popq rdi ++
+        addq (imm ofs) !%rdi ++
+        (if size t = 1 then movq (ind rdi) !%rdi else nop) ++
+        call_print ~follow_ptr:false t
+      | (t, ofs)::q ->
+        let c = p_struct q in
+        popq rdi ++
+        pushq !%rdi ++
+        addq (imm ofs) !%rdi ++
+        (if size t = 1 then movq (ind rdi) !%rdi else nop) ++
+        call_print ~follow_ptr:false t ++
+        leaq (lab ".Sprint_space") rdi ++
+        movq (imm 0) !%rax ++
+        call "printf" ++
+        c
+    in
+    pushq !%rdi ++
+    leaq (lab ".Sprint_lbra") rdi ++
+    movq (imm 0) !%rax ++
+    call "printf" ++
+    p_struct fields ++
+    leaq (lab ".Sprint_rbra") rdi ++
+    movq (imm 0) !%rax ++
+    call "printf"
+  | Pointer (Tstruct s) when follow_ptr ->
+    let print_s = call_print ~follow_ptr:false (Tstruct s) in
+    let lab_nil = new_lab () in
+    let lab_ptr = new_lab () in
+    testq !%rdi !%rdi ++
+    je lab_nil ++
+    pushq !%rdi ++
     leaq (lab ".Sprint_amp") rdi ++
     movq (imm 0) !%rax ++
     call "printf" ++
-    movq !%rsi !%rdi ++
-    print_s
+    popq rdi ++
+    print_s ++
+    jmp lab_ptr ++
+    label lab_nil ++
+    leaq (lab ".Sprint_nil") rdi ++
+    movq (imm 0) !%rax ++
+    call "printf" ++
+    label lab_ptr
   | Pointer _ ->
     let lab_nil = new_lab () in
     let lab_ptr = new_lab () in
@@ -135,23 +189,11 @@ let rec call_print = function
     movq (imm 0) !%rax ++
     call "printf"
   | Tlist [] -> nop
-  | Tlist [t] -> call_print t
   | Tlist l ->
-    let size_l = size (Tlist l) in
+    (*let size_l = size (Tlist l) in *)
     nop (* TODO avec les structures *)
   | Tall -> nop
 
-(*let fmt_print v_env =
-  (* TODO : print_strucures
-     let rec print_fields
-     let print_struct s =
-     label ("print_struct_"^s) ++
-     call "print_lbra" ++
-     nop
-     in
-  *)
-  fmt_print_base
-*)
 (* Arguments de printf pour l'affichage *)
 let print_labels =
   label ".Sprint_int"     ++ string "%lld"   ++
@@ -174,33 +216,25 @@ let compile_cst = function
   | Cstring s -> leaq (new_str s) rdi
 
 (* La valeur calculéee se trouve dans le registre %rdi *)
-let rec compile_expr ?(keep_ptr=false) l_env = function
+let rec compile_expr ?(k_p=false) l_env = function
   | _, Tecst c ->
     compile_cst c
   | t, Tevar (x, _) ->
     let pos, t_val = Smap.find x l_env.env in
     movq (ind ~ofs:pos rbp) !%rdi ++
-    (if size t = 1 && not keep_ptr && not t_val then
+    (if size t = 1 && not k_p && not t_val then
       (* On met directement la valeur dans %rdi *)
       movq (ind rdi) !%rdi
     else
       (* On garde l'adresse dans %rdi *)
       nop)
   | _, Teunop (u, e) ->
-    compile_unop keep_ptr l_env e u
+    compile_unop k_p l_env e u
   | _, Tebinop (b, e1, e2) ->
     compile_binop l_env e1 e2 b
   | t, Tecall (f, l) ->
-    let s, c =
-      List.fold_left
-        (fun (s, c) (t, _ as e) ->
-           let c_e = compile_expr l_env e in
-           if size t = 1 then
-             s + 1, c ++ c_e ++ pushq !%rdi
-           else
-             size t, c ++ c_e) (0, nop) l in
+    let s, c = compile_call l_env t f l in
     c ++
-    call ("func_"^f) ++
     (if size t = 1 then movq !%rax !%rdi else nop) ++
     pop s
   | _, Tenew t ->
@@ -209,14 +243,53 @@ let rec compile_expr ?(keep_ptr=false) l_env = function
     movq (imm 0) !%rax ++
     call "calloc" ++
     movq !%rax !%rdi
+  | _, Teattr ((t', _ as e), f) ->
+    let c = compile_expr ~k_p:k_p l_env e in
+    let (t, ofs) = get_field f t' in
+    c ++
+    addq (imm ofs) !%rdi ++
+    (if size t = 1 && not k_p then
+       movq (ind rdi) !%rdi
+     else
+       nop)
   | _ -> assert false
+
+(* Compilation des appels de fonction *)
+and compile_call l_env t f l =
+    let s, c =
+      List.fold_left
+        (fun (s, c) (t, _ as e) ->
+           let c_e = compile_expr l_env e in
+           if size t = 1 then
+             s + 1, c ++ c_e ++ pushq !%rdi
+           else
+             size t, c ++ c_e) (0, nop) l in
+    s,
+    c ++
+    call ("func_"^f)
+
+and compile_comp = function
+  | _ -> assert false
+
+and compile_diff l_env eq (t, _ as e1) e2 =
+  if size t = 1 then
+    compile_expr l_env e1 ++
+    pushq !%rdi ++
+    compile_expr l_env e2 ++
+    popq rsi ++
+    cmpq !%rdi !%rsi ++
+    (if eq then sete else setne) !%dil ++
+    andq (imm 1) !%rdi
+  else
+    nop
 
 (* Instructions unaires *)
 and compile_unop keep_ptr l_env (t, _ as e) = function
   | Unot ->
     compile_expr l_env e ++
-    cmpq !%rdi (imm 0) ++
-    sete !%rdi
+    testq !%rdi !%rdi ++
+    sete !%dil ++
+    andq (imm 1) !%rdi
   | Uneg ->
     compile_expr l_env e ++
     negq !%rdi
@@ -229,7 +302,7 @@ and compile_unop keep_ptr l_env (t, _ as e) = function
         | _ -> assert false
     end
   | Uderef ->
-    compile_expr ~keep_ptr:true l_env e
+    compile_expr ~k_p:true l_env e
 
 (* Instructions pour les opérations binaires avec e1 dans %rdi et e2 dans %rsi
  * et place le résultat dans %rdi *)
@@ -307,7 +380,10 @@ and compile_binop l_env e1 e2 = function
     cmpq !%rdi !%rsi ++
     setge !%dil ++
     andq (imm 1) !%rdi
-  | _ -> assert false
+  | Beq ->
+    compile_diff l_env true e1 e2
+  | Bneq ->
+    compile_diff l_env false e1 e2
 
 (* Compilation d'un appel à print *)
 let rec compile_print l_env = function
@@ -375,19 +451,92 @@ let rec compile_instr l_env = function
     c ++
     jmp lab_start ++
     label lab_end
-  | Tiassoc _ -> (* TODO *) assert false
+  | Tiassoc (l1, l2) ->
+    let c_d =
+      List.fold_left
+        (fun c e -> c ++ (compile_expr l_env e) ++ pushq !%rdi)
+        nop l2 in
+    let c_g =
+      List.fold_right
+        (fun (t, _ as e) c ->
+           c ++
+           (compile_expr ~k_p:true l_env e) ++
+           popq rsi ++
+           (if size t = 1 then
+              movq !%rsi (ind rdi)
+            else
+              movq (imm (size_8 t)) !%rdx ++
+              call "memmove"))
+        l1 nop in
+    l_env, c_d ++ c_g
   | Tivar (l, Some t, []) ->
     List.fold_left
       (fun (e, c) x ->
          let e' = add_loc e x t in
          e' , c ++ init t e'.next)
       (l_env, nop) l
+  | Tivar (l1, None, [Tlist r, Tecall (f, l)]) ->
+    let s, c_f = compile_call l_env (Tlist r) f l in
+    let n_env, c =
+      List.fold_right2
+        (fun x t (e, c) ->
+           let e' = add_loc e x t in
+           e',
+           c ++
+           init t e'.next ++
+           popq rsi ++
+           (if size t = 1 then
+              movq !%rsi (ind rax)
+            else
+              movq !%rax !%rdi ++
+              movq (imm (size_8 t)) !%rdx ++
+              call "memmove"))
+        l1 r (l_env, c_f) in
+    n_env,
+    c ++
+    pop s
+  | Tivar (l1, None, l2) ->
+    let c_d, l_t =
+      List.fold_left
+        (fun (c, l) (t, _ as e) ->
+           c ++ (compile_expr l_env e) ++ pushq !%rdi, t::l)
+        (nop, []) l2 in
+    List.fold_right2
+      (fun x t (e, c) ->
+         let e' = add_loc e x t in
+         e',
+         c ++
+         init t e'.next ++
+         popq rsi ++
+         (if size t = 1 then
+            movq !%rsi (ind rax)
+          else
+            movq !%rax !%rdi ++
+            movq (imm (size_8 t)) !%rdx ++
+            call "memmove"))
+      l1 (List.rev l_t) (l_env, c_d)
   | Tivar (l, _, _) -> assert false
   | Tireturn [t, _ as e] when size t = 1 ->
     l_env,
     compile_expr l_env e ++
     movq !%rdi !%rax
-  | Tireturn l -> assert false
+  | Tireturn l ->
+    let c_r, s_r =
+      List.fold_left
+        (fun (c, s) (t, _ as e) ->
+           c ++
+           pushq !%rax ++
+           compile_expr l_env e ++
+           popq rax ++
+           movq !%rdi (ind ~ofs:s rax),
+           s + 8)
+        (nop, 0) l in
+    l_env,
+    movq (imm s_r) !%rdi ++
+    movq (imm 0) !%rax ++
+    call "malloc" ++
+    c_r ++
+    ret
 
 (* On ne compile pas les structures, uniquement les fonctions *)
 let compile_decl (f, v, t, b, s) =
@@ -415,8 +564,6 @@ let compile_program (b, p, s, v_env, f_env) ofile =
         movq (imm 0) !%rax ++
         ret ++
         code;
-        (* On ne rajoute les instructions d'affichage que si fmt est importé *)
-        (*(if b then fmt_print v_env else nop)*)
       data =
         (*Hashtbl.fold (fun x _ l -> label x ++ dquad [1] ++ l) genv*)
         List.fold_left (fun c (l, s) -> label l ++ string s ++ c )
